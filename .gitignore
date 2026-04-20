@@ -1,0 +1,24 @@
+# Xcode
+build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (unused but future-proof)
+Pods/
+Carthage/Build/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
