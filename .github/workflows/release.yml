@@ -1,0 +1,154 @@
+name: Release to TestFlight
+
+# Opt-in workflow. Push a tag like v0.1.0 or run manually.
+# Requires an Apple Developer account ($99/yr) and several secrets — see README
+# section "TestFlight from CI" for setup instructions.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: "Override build number (optional)"
+        required: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  archive-and-upload:
+    name: Archive & Upload
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    env:
+      # Names must match project.yml / App Store Connect.
+      SCHEME: TimeTwister
+      BUNDLE_ID: com.timetwister.app
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Stamp team ID into project.yml
+        # project.yml ships with DEVELOPMENT_TEAM empty; fill it from the secret
+        # so signing can resolve automatic profiles.
+        run: |
+          if [ -z "$TEAM_ID" ]; then
+            echo "APPLE_TEAM_ID secret is not set" >&2
+            exit 1
+          fi
+          sed -i '' "s/DEVELOPMENT_TEAM: \"\"/DEVELOPMENT_TEAM: \"$TEAM_ID\"/" project.yml
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          p12-password: ${{ secrets.BUILD_CERTIFICATE_PASSWORD }}
+
+      - name: Download provisioning profiles
+        uses: apple-actions/download-provisioning-profiles@v3
+        with:
+          bundle-id: ${{ env.BUNDLE_ID }}
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          # Keyboard extension has its own bundle id; fetch its profile too.
+        env:
+          # Download a second profile for the keyboard extension bundle id.
+          # The action doesn't support multiple bundle-ids in one call, so we
+          # call it twice.
+          _: ""
+
+      - name: Download keyboard extension profile
+        uses: apple-actions/download-provisioning-profiles@v3
+        with:
+          bundle-id: com.timetwister.app.keyboard
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+
+      - name: Set build number
+        id: bn
+        run: |
+          if [ -n "${{ github.event.inputs.build_number }}" ]; then
+            echo "value=${{ github.event.inputs.build_number }}" >> $GITHUB_OUTPUT
+          else
+            # CI run number is monotonic within a repo; fine for TestFlight.
+            echo "value=${{ github.run_number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Archive
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project TimeTwister.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/TimeTwister.xcarchive \
+            CURRENT_PROJECT_VERSION=${{ steps.bn.outputs.value }} \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            archive | xcpretty
+
+      - name: Export IPA
+        run: |
+          cat > ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>teamID</key>
+              <string>TEAM_ID_PLACEHOLDER</string>
+              <key>uploadBitcode</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+          sed -i '' "s/TEAM_ID_PLACEHOLDER/$TEAM_ID/" ExportOptions.plist
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/TimeTwister.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build/export | xcpretty
+
+      - name: Upload to TestFlight
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$APPSTORE_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8
+          xcrun altool --upload-app \
+            -f build/export/TimeTwister.ipa \
+            -t ios \
+            --apiKey "$APPSTORE_KEY_ID" \
+            --apiIssuer "$APPSTORE_ISSUER_ID"
+
+      - name: Upload IPA as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TimeTwister-ipa
+          path: build/export/*.ipa
+          retention-days: 30
