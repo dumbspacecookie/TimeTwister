@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Adaptive-icon safe zone is the inner 72x72 area (centered). -->
+    <group android:translateX="18" android:translateY="18">
+        <!-- Clock face ring. -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M36,0 A36,36 0 1,0 36,72 A36,36 0 1,0 36,0 Z M36,6 A30,30 0 1,1 36,66 A30,30 0 1,1 36,6 Z" />
+        <!-- Hour hand (up). -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M34,16 H38 V38 H34 Z" />
+        <!-- Minute hand (right). -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M36,34 H58 V38 H36 Z" />
+        <!-- Center cap. -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M36,32 A4,4 0 1,0 36,40 A4,4 0 1,0 36,32 Z" />
+    </group>
+</vector>

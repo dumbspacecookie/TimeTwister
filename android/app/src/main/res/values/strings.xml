@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TimeTwister</string>
+    <!-- Shown in the selection toolbar when the user long-presses a time reference. -->
+    <string name="process_text_label">TimeTwister</string>
+</resources>

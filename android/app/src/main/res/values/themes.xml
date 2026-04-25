@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose owns the actual visuals; this XML theme is just a placeholder so
+         AndroidManifest has something to reference before Compose takes over. -->
+    <style name="Theme.TimeTwister" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

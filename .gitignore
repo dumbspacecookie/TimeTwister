@@ -16,6 +16,15 @@ Package.resolved
 Pods/
 Carthage/Build/
 
+# Android / Gradle
+android/.gradle/
+android/**/build/
+android/local.properties
+android/captures/
+android/.cxx/
+android/app/release/
+*.iml
+
 # macOS
 .DS_Store
 
