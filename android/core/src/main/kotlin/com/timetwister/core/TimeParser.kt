@@ -16,8 +16,7 @@ object TimeParser {
         \b
         (?<hour>\d{1,2})
         (?: : (?<minute>\d{2}) )?
-        \s*
-        (?<ampm>am|pm|a\.m\.|p\.m\.)?
+        (?: \s* (?<ampm>am|pm|a\.m\.|p\.m\.) )?
         (?:
             \s+
             (?<tz>
