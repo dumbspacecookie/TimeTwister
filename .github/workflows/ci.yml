@@ -91,12 +91,16 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
 
+      # Invoke `gradle` directly rather than `./gradlew` — the wrapper jar isn't
+      # committed to the repo (Android Studio regenerates it on first sync locally).
       - name: Build debug APK
-        run: ./gradlew :app:assembleDebug
+        run: gradle :app:assembleDebug
 
       - name: Run core tests
-        run: ./gradlew :core:test
+        run: gradle :core:test
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

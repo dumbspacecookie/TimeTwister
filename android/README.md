@@ -42,7 +42,7 @@ android/
 
 ### Command line (no IDE)
 
-Once the wrapper exists:
+The Gradle wrapper jar isn't committed (keeps the repo text-only). Android Studio regenerates it on first project sync; if you're going IDE-less, grab Gradle 8.10+ and run `gradle wrapper` once in `android/` to produce the jar, then:
 
 ```bash
 cd android
