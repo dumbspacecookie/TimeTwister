@@ -97,4 +97,59 @@ final class TimeConverterTests: XCTestCase {
         let stamp = TimeConverter.renderStamp(for: detected, targets: [ct], now: fixed)
         XCTAssertFalse(stamp.contains("("), "no parens when targets == [source]")
     }
+
+    // MARK: - coverage hardening (regressions caught by StampDemo)
+
+    func testParserLowercaseTzToken() {
+        // regex is case-insensitive; "utc" lowercase should resolve to UTC.
+        let detected = TimeParser.detect(in: "ship by 11pm utc")
+        XCTAssertEqual(detected.first?.hour, 23)
+        XCTAssertEqual(detected.first?.timeZone.identifier, "UTC")
+    }
+
+    func testParserUppercaseAmPm() {
+        let detected = TimeParser.detect(in: "call at 5PM CT")
+        XCTAssertEqual(detected.first?.hour, 17)
+        XCTAssertEqual(detected.first?.timeZone.identifier, ct.identifier)
+    }
+
+    func testParserDottedAmPm() {
+        // "p.m." form, dots get stripped before comparison.
+        let detected = TimeParser.detect(in: "call at 5p.m. CT")
+        XCTAssertEqual(detected.first?.hour, 17)
+    }
+
+    func testParserMultiWordZoneEastern() {
+        let detected = TimeParser.detect(in: "demo at 2:15pm eastern")
+        XCTAssertEqual(detected.first?.hour, 14)
+        XCTAssertEqual(detected.first?.minute, 15)
+        XCTAssertEqual(detected.first?.timeZone.identifier, et.identifier)
+    }
+
+    func testParser12pmIsNoonNot12am() {
+        // historic gotcha: 12pm in 12-hour clock is 12:00, NOT 0:00.
+        let detected = TimeParser.detect(in: "call at 12pm CT")
+        XCTAssertEqual(detected.first?.hour, 12)
+    }
+
+    func testParser12amIsMidnight() {
+        // and 12am is 0:00, not 12:00.
+        let detected = TimeParser.detect(in: "deploy at 12am ET")
+        XCTAssertEqual(detected.first?.hour, 0)
+    }
+
+    func testConverterHalfHourOffsetZone() {
+        // India is UTC+5:30 — the :30 must propagate through to rendered minutes.
+        let ist = TimeZone(identifier: "Asia/Kolkata")!
+        let fixed = Date(timeIntervalSince1970: 1_714_550_400) // 2026-05-01 around midday UTC
+        let detected = DetectedTime(
+            hour: 19, minute: 0,
+            timeZone: ist,
+            hadExplicitZone: true,
+            range: NSRange(),
+            originalText: "7pm IST"
+        )
+        let stamp = TimeConverter.renderStamp(for: detected, targets: [ist, et], now: fixed)
+        XCTAssertTrue(stamp.contains(":30"), "expected ':30' in cross-zone render, got: \(stamp)")
+    }
 }
