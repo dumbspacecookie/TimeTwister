@@ -53,6 +53,7 @@ object TimeZoneAlias {
         "sgt" to "Asia/Singapore",
         "singapore" to "Asia/Singapore",
         "hkt" to "Asia/Hong_Kong",
+        "cst_china" to "Asia/Shanghai", // intentional disambiguation; "CST" alone stays US Central
         "aest" to "Australia/Sydney",
         "aedt" to "Australia/Sydney",
         "sydney" to "Australia/Sydney",
@@ -87,6 +88,7 @@ object TimeZoneAlias {
         "Asia/Seoul" -> "KST"
         "Asia/Singapore" -> "SGT"
         "Asia/Hong_Kong" -> "HKT"
+        "Asia/Shanghai" -> "CN"
         "Australia/Sydney" -> "AEST"
         "Pacific/Auckland" -> "NZ"
         else -> zone.id
