@@ -45,6 +45,30 @@ class TimeConverterTest {
         assertEquals(et.id, detected.first().zone.id)
     }
 
+    @Test fun parserNoon() {
+        val detected = TimeParser.detect("call at noon CT")
+        assertEquals(1, detected.size)
+        assertEquals(12, detected[0].hour)
+        assertEquals(0, detected[0].minute)
+        assertEquals(ct.id, detected[0].zone.id)
+    }
+
+    @Test fun parserMidnight() {
+        val detected = TimeParser.detect("deploy at midnight ET")
+        assertEquals(1, detected.size)
+        assertEquals(0, detected[0].hour)
+        assertEquals(0, detected[0].minute)
+        assertEquals(et.id, detected[0].zone.id)
+    }
+
+    @Test fun parserNoonWithoutTzStillMatches() {
+        // noon/midnight self-disambiguate — no TZ required.
+        val detected = TimeParser.detect("see you at noon")
+        assertEquals(1, detected.size)
+        assertEquals(12, detected[0].hour)
+        assertFalse(detected[0].hadExplicitZone)
+    }
+
     @Test fun converterStampAcrossZones() {
         val detected = DetectedTime(
             hour = 17, minute = 0, zone = ct,

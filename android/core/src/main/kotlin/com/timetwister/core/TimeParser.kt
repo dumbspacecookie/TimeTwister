@@ -10,13 +10,19 @@ import java.time.ZoneId
 object TimeParser {
 
     // (?xi) = COMMENTS + CASE_INSENSITIVE. Extended syntax lets us annotate the groups.
+    // Either a numeric time (with am/pm or TZ) or the keywords noon/midnight (which
+    // self-disambiguate — no am/pm needed).
     private val pattern: Regex = Regex(
         """
         (?xi)
         \b
-        (?<hour>\d{1,2})
-        (?: : (?<minute>\d{2}) )?
-        (?: \s* (?<ampm>am|pm|a\.m\.|p\.m\.) )?
+        (?:
+            (?<keyword>noon|midnight)
+          |
+            (?<hour>\d{1,2})
+            (?: : (?<minute>\d{2}) )?
+            (?: \s* (?<ampm>am|pm|a\.m\.|p\.m\.) )?
+        )
         (?:
             \s+
             (?<tz>
@@ -36,32 +42,39 @@ object TimeParser {
         val out = mutableListOf<DetectedTime>()
 
         for (m in pattern.findAll(text)) {
-            val hourRaw = m.groups["hour"]?.value?.toIntOrNull() ?: continue
-            val minuteRaw = m.groups["minute"]?.value?.toIntOrNull() ?: 0
-            val ampmRaw = m.groups["ampm"]?.value?.lowercase()?.replace(".", "")
+            val keywordRaw = m.groups["keyword"]?.value?.lowercase()
             val tzRaw = m.groups["tz"]?.value
-
-            val hasAmpm = !ampmRaw.isNullOrEmpty()
             val hasTz = !tzRaw.isNullOrEmpty()
-
-            // Require a disambiguator to avoid false positives.
-            if (!hasAmpm && !hasTz) continue
-
-            var hour24 = hourRaw
-            if (hasAmpm) {
-                if (hourRaw !in 1..12) continue
-                if (ampmRaw == "pm" && hour24 < 12) hour24 += 12
-                if (ampmRaw == "am" && hour24 == 12) hour24 = 0
-            } else if (hour24 !in 0..23) {
-                continue
-            }
-            if (minuteRaw !in 0..59) continue
-
             val zone = if (hasTz) TimeZoneAlias.resolve(tzRaw!!) ?: defaultZone else defaultZone
+
+            val (hour24, minute) = when (keywordRaw) {
+                "noon" -> 12 to 0
+                "midnight" -> 0 to 0
+                else -> {
+                    val hourRaw = m.groups["hour"]?.value?.toIntOrNull() ?: continue
+                    val minuteRaw = m.groups["minute"]?.value?.toIntOrNull() ?: 0
+                    val ampmRaw = m.groups["ampm"]?.value?.lowercase()?.replace(".", "")
+                    val hasAmpm = !ampmRaw.isNullOrEmpty()
+
+                    // Require a disambiguator to avoid false positives.
+                    if (!hasAmpm && !hasTz) continue
+
+                    var h = hourRaw
+                    if (hasAmpm) {
+                        if (hourRaw !in 1..12) continue
+                        if (ampmRaw == "pm" && h < 12) h += 12
+                        if (ampmRaw == "am" && h == 12) h = 0
+                    } else if (h !in 0..23) {
+                        continue
+                    }
+                    if (minuteRaw !in 0..59) continue
+                    h to minuteRaw
+                }
+            }
 
             out += DetectedTime(
                 hour = hour24,
-                minute = minuteRaw,
+                minute = minute,
                 zone = zone,
                 hadExplicitZone = hasTz,
                 range = m.range,

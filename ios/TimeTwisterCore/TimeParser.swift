@@ -23,18 +23,20 @@ public struct DetectedTime: Equatable {
 /// light up constantly.
 public enum TimeParser {
 
-    // (hh)(:mm)? (am|pm)? (tz)?
-    // - hour 1..12 if am/pm present, 0..23 if not
-    // - TZ is a 2-6 letter token or "pacific"/"eastern"/... (up to 10 letters)
-    //
-    // We use word boundaries to avoid matching inside identifiers.
+    // Either a numeric time (hh[:mm][am/pm]) or the keywords noon/midnight,
+    // optionally followed by a TZ token. Word boundaries avoid matching inside
+    // identifiers. The numeric branch keeps `\s*` *inside* the optional ampm group
+    // so it doesn't eat the separator before the TZ when no am/pm is present.
     private static let pattern = #"""
     (?xi)
     \b
-    (?<hour>\d{1,2})
-    (?: : (?<minute>\d{2}) )?
-    \s*
-    (?<ampm>am|pm|a\.m\.|p\.m\.)?
+    (?:
+        (?<keyword>noon|midnight)
+      |
+        (?<hour>\d{1,2})
+        (?: : (?<minute>\d{2}) )?
+        (?: \s* (?<ampm>am|pm|a\.m\.|p\.m\.) )?
+    )
     (?:
         \s+
         (?<tz>
@@ -58,42 +60,52 @@ public enum TimeParser {
 
         var out: [DetectedTime] = []
         for m in matches {
+            let keywordRange = m.range(withName: "keyword")
             let hourRange = m.range(withName: "hour")
             let minuteRange = m.range(withName: "minute")
             let ampmRange = m.range(withName: "ampm")
             let tzRange = m.range(withName: "tz")
 
-            guard hourRange.location != NSNotFound,
-                  let hourRaw = Int(ns.substring(with: hourRange)) else { continue }
-
-            let hasAMPM = ampmRange.location != NSNotFound
             let hasTZ = tzRange.location != NSNotFound
-
-            // Require a disambiguator to avoid false positives.
-            guard hasAMPM || hasTZ else { continue }
-
-            let minuteRaw: Int = minuteRange.location != NSNotFound
-                ? (Int(ns.substring(with: minuteRange)) ?? 0)
-                : 0
-
-            // Normalize to 24-hour.
-            var hour24 = hourRaw
-            if hasAMPM {
-                let ampm = ns.substring(with: ampmRange).lowercased().replacingOccurrences(of: ".", with: "")
-                if ampm == "pm" && hour24 < 12 { hour24 += 12 }
-                if ampm == "am" && hour24 == 12 { hour24 = 0 }
-                guard hourRaw >= 1 && hourRaw <= 12 else { continue }
-            } else {
-                guard hour24 >= 0 && hour24 <= 23 else { continue }
-            }
-            guard minuteRaw >= 0 && minuteRaw <= 59 else { continue }
-
             let zone: TimeZone
             if hasTZ {
                 let token = ns.substring(with: tzRange)
                 zone = TimeZoneAlias.resolve(token) ?? defaultTZ
             } else {
                 zone = defaultTZ
+            }
+
+            let hour24: Int
+            let minuteRaw: Int
+
+            if keywordRange.location != NSNotFound {
+                let keyword = ns.substring(with: keywordRange).lowercased()
+                hour24 = (keyword == "noon") ? 12 : 0
+                minuteRaw = 0
+            } else {
+                guard hourRange.location != NSNotFound,
+                      let hourRaw = Int(ns.substring(with: hourRange)) else { continue }
+
+                let hasAMPM = ampmRange.location != NSNotFound
+
+                // Require a disambiguator to avoid false positives.
+                guard hasAMPM || hasTZ else { continue }
+
+                minuteRaw = minuteRange.location != NSNotFound
+                    ? (Int(ns.substring(with: minuteRange)) ?? 0)
+                    : 0
+
+                var h = hourRaw
+                if hasAMPM {
+                    let ampm = ns.substring(with: ampmRange).lowercased().replacingOccurrences(of: ".", with: "")
+                    if ampm == "pm" && h < 12 { h += 12 }
+                    if ampm == "am" && h == 12 { h = 0 }
+                    guard hourRaw >= 1 && hourRaw <= 12 else { continue }
+                } else {
+                    guard h >= 0 && h <= 23 else { continue }
+                }
+                guard minuteRaw >= 0 && minuteRaw <= 59 else { continue }
+                hour24 = h
             }
 
             out.append(DetectedTime(

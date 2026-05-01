@@ -41,6 +41,30 @@ final class TimeConverterTests: XCTestCase {
         XCTAssertEqual(detected.first?.timeZone.identifier, et.identifier)
     }
 
+    func testParserNoon() {
+        let detected = TimeParser.detect(in: "call at noon CT")
+        XCTAssertEqual(detected.count, 1)
+        XCTAssertEqual(detected.first?.hour, 12)
+        XCTAssertEqual(detected.first?.minute, 0)
+        XCTAssertEqual(detected.first?.timeZone.identifier, ct.identifier)
+    }
+
+    func testParserMidnight() {
+        let detected = TimeParser.detect(in: "deploy at midnight ET")
+        XCTAssertEqual(detected.count, 1)
+        XCTAssertEqual(detected.first?.hour, 0)
+        XCTAssertEqual(detected.first?.minute, 0)
+        XCTAssertEqual(detected.first?.timeZone.identifier, et.identifier)
+    }
+
+    func testParserNoonWithoutTzStillMatches() {
+        // noon/midnight self-disambiguate — no TZ required.
+        let detected = TimeParser.detect(in: "see you at noon")
+        XCTAssertEqual(detected.count, 1)
+        XCTAssertEqual(detected.first?.hour, 12)
+        XCTAssertEqual(detected.first?.hadExplicitZone, false)
+    }
+
     func testConverterStampAcrossZones() {
         // 5pm CT on a fixed date should render 6pm ET and 3pm PT.
         let fixed = Date(timeIntervalSince1970: 1_700_000_000) // arbitrary stable anchor
