@@ -11,17 +11,17 @@ An iOS custom keyboard that converts timezone references inline, before you send
 ## Project layout
 
 ```
-timetwister/
+ios/
 ├── README.md
-├── project.yml                     # XcodeGen spec — generates .xcodeproj
+├── project.yml                     # XcodeGen spec — generates .xcodeproj + Info.plists
 ├── TimeTwister/                    # Container app (settings UI)
 │   ├── App.swift
 │   ├── SettingsView.swift
-│   └── Info.plist
+│   └── TimeTwister.entitlements    # App Group
 ├── TimeTwisterKeyboard/            # Keyboard extension target
 │   ├── KeyboardViewController.swift
 │   ├── SuggestionBar.swift
-│   └── Info.plist
+│   └── TimeTwisterKeyboard.entitlements
 ├── TimeTwisterCore/                # Shared logic (linked into both targets)
 │   ├── TimeZoneAlias.swift         # "CT" / "pacific" / "EST" → IANA
 │   ├── TimeParser.swift            # regex-based detector
@@ -30,6 +30,8 @@ timetwister/
 └── TimeTwisterCoreTests/
     └── TimeConverterTests.swift
 ```
+
+`Info.plist` files are generated from `project.yml` on `xcodegen generate` — they're not committed to the repo.
 
 ## Setup on macOS
 
@@ -51,20 +53,9 @@ timetwister/
 3. Add external testers via public link, up to 10,000
 4. Rebuild every 90 days (TestFlight build expiry)
 
-### TestFlight from CI (optional)
+### TestFlight from CI (deferred — see roadmap v0.3)
 
-`.github/workflows/release.yml` archives + uploads to TestFlight when you push a tag like `v0.1.0`. Once set up you never need a Mac again for releases. Secrets required in GitHub repo settings:
-
-| Secret | Where to get it |
-|---|---|
-| `APPLE_TEAM_ID` | developer.apple.com → Membership → Team ID |
-| `BUILD_CERTIFICATE_BASE64` | Export your Apple Distribution cert from Keychain as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
-| `BUILD_CERTIFICATE_PASSWORD` | The password you set when exporting the `.p12` |
-| `APPSTORE_KEY_ID` | App Store Connect → Users and Access → Keys → the Key ID |
-| `APPSTORE_ISSUER_ID` | Same page, top of the Keys tab |
-| `APPSTORE_PRIVATE_KEY` | The `.p8` file contents from that same Keys page (download is one-time) |
-
-Create the App Store Connect API key with "App Manager" access. First-time setup still needs a Mac to export the signing cert; after that, releases are push-a-tag.
+`.github/workflows/release.yml` is wired to archive + upload to TestFlight on a `v*` tag, but the secrets aren't configured yet (this build is sideload-only for now). Setting it up needs an Apple Developer Program membership ($99/yr) and a one-time Mac session to export the signing cert; full secret list lives in the workflow file when we're ready.
 
 ## Privacy posture
 
