@@ -9,7 +9,26 @@ This repo is a monorepo with two builds:
 | **Android** | [`android/`](android/) | `ACTION_PROCESS_TEXT` (selection toolbar) | Primary target — see [android/README.md](android/README.md) |
 | **iOS** | [`ios/`](ios/) | Keyboard extension | Scaffold — see [ios/README.md](ios/README.md) |
 
-The core logic (parser, alias table, stamp renderer) is duplicated in Swift and Kotlin — the two cores produce identical output for the same input, and their test suites mirror each other so divergence is caught early.
+The core logic (parser, alias table, stamp renderer) is duplicated in Swift and Kotlin — the two cores produce identical output for the same input, and their test suites mirror each other so divergence is caught early (16 tests per side, JVM-only on the Kotlin side so no emulator needed).
+
+## Demo
+
+What you type, and what gets sent:
+
+| You type | What gets sent |
+|---|---|
+| `lets do 5pm CT` | `lets do 5pm CT (6pm ET · 3pm PT)` |
+| `how about 5:30pm pacific` | `how about 5:30pm PT (7:30pm CT · 8:30pm ET)` |
+| `landing at 17:00 ET` | `landing at 5pm ET (4pm CT · 2pm PT)` |
+| `call at noon CT` | `call at 12pm CT (1pm ET · 10am PT)` |
+| `deploy at midnight ET` | `deploy at 12am ET (11pm CT · 9pm PT)` |
+| `ship by 11pm utc` | `ship by 11pm UTC (6pm CT · 7pm ET · 4pm PT)` |
+| `meet at 7pm ist tomorrow` | `meet at 7pm IST (8:30am CT · 9:30am ET · 6:30am PT) tomorrow` |
+| `room 5 is open` | *(no detection — bare numbers without a TZ or am/pm are ignored)* |
+
+Targets above are CT/ET/PT — these are the user-configurable set in the settings screen. Half-hour offset zones (India, Nepal, parts of Australia) are handled correctly because the converter uses IANA zone IDs, not fixed offsets, so DST transitions also do the right thing.
+
+You can reproduce this locally without sideloading: `gradle :core:test --tests "*StampDemo*" --info` from `android/`.
 
 ## Why both?
 
@@ -35,3 +54,7 @@ Android is now the primary build. The iOS scaffold is kept intact in case the UX
 - **v0.3** — Play Store + TestFlight distribution.
 - **v0.4** — iOS share-sheet extension (removes the keyboard-swap problem on iOS).
 - **v0.5** — Desktop port (macOS via Catalyst, Windows via plain Kotlin/JVM tray app sharing the `core` module).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
