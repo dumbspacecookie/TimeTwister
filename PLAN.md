@@ -49,20 +49,47 @@ instrumentation tests possible (which decides item 6).
 - [ ] Confirm no white flash on launch in dark mode
 - [ ] Screenshot the result
 
-### 2. Decide whether Swift can be verified on Windows
+### 2. ~~Decide whether Swift can be verified on Windows~~ — **ANSWERED 2026-07-25: yes, with one fix**
 
-Gates item 5. Visual Studio Build Tools 2022 and Windows SDK 10.0.26100 are
-present, which is Swift-on-Windows' hard prerequisite, and `TimeTwisterCore` is
-pure Foundation (`TimeZone`, `DateFormatter`, `NSRegularExpression` — all present
-in swift-corelibs).
+Swift 6.3.3 installed to the user profile (no elevation). The **whole Swift core
+compiles on Windows**, XCTest runs, and `CountryZoneTests` passes 7/7. Parsing,
+alias resolution, `NSRegularExpression`, calendar maths and `TimeZone` all behave.
 
-If it builds, the 28 XCTest cases become a live oracle here and item 5 moves up.
-If it doesn't, **the Swift port would be code nobody can execute until someone
-sits at a Mac**, and it should wait for that session instead.
+One blocker, isolated to a single line: **`DateFormatter.string(from:)` traps**
+(illegal instruction, `0xC000001D`) in swift-corelibs-Foundation on Windows, with
+or without an explicit locale. Every test that renders a time dies there.
 
-- [ ] Install the Swift toolchain, compile `ios/TimeTwisterCore/*.swift` standalone
-- [ ] Run the existing XCTest suite, or a shim harness if XCTest is unavailable
-- [ ] Record the verdict here
+Verified alternatives on the same input (Kolkata, 2026-01-15T13:00Z):
+
+| approach | result |
+|---|---|
+| manual `Calendar` arithmetic | ✅ `6:30pm` |
+| `Date.FormatStyle` | ✅ works |
+| `DateFormatter` (+/- locale) | ❌ traps |
+
+`DateFormatter` is used in exactly **one** place — `TimeConverter.formatted()`.
+This is a corelibs-on-Windows limitation, **not an iOS bug**: Apple's Foundation
+is a different implementation, so nothing is broken on device today.
+
+- [x] Toolchain installed, core compiles, XCTest runs
+- [ ] Replace `TimeConverter.formatted()` with manual arithmetic. Worth doing on
+      its own merits: it drops a heavyweight locale-sensitive dependency for what
+      is a trivial 12-hour render, matches how Kotlin pins the pattern, kills the
+      classic `DateFormatter` locale bug class outright, and makes the Swift core
+      testable on Windows **and** on a Linux CI runner instead of macOS only.
+- [ ] Then run the full 28-case suite here and use it as the oracle for item 5
+
+Repro (needs `vcvars64.bat` in the environment):
+
+```powershell
+$base = "$env:LOCALAPPDATA\Programs\Swift"
+$env:PATH = "$base\Toolchains\6.3.3+Asserts\usr\bin;$base\Runtimes\6.3.3\usr\bin;$env:PATH"
+$env:SDKROOT = "$base\Platforms\6.3.3\Windows.platform\Developer\SDKs\Windows.sdk"
+swift test   # from a SwiftPM package wrapping ios/TimeTwisterCore
+```
+
+A permanent `Package.swift` in `ios/` would make this a one-command check for
+everyone, and would let CI test the Swift core without a Mac.
 
 ### 3. Parser gaps that still mislead
 
