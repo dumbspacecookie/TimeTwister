@@ -2,12 +2,13 @@
 
 Converts timezone references inline, before you send. Type `5pm CT`, and TimeTwister expands it to `5pm CT (6pm ET · 3pm PT)` — in iMessage, WhatsApp, Signal, Telegram, Slack, anywhere you type.
 
-This repo is a monorepo with two builds:
+This repo is a monorepo with three builds, all sharing one Kotlin/Swift parser core:
 
 | Platform | Path | Entry point | Status |
 |---|---|---|---|
 | **Android** | [`android/`](android/) | `ACTION_PROCESS_TEXT` (selection toolbar) | Primary target — see [android/README.md](android/README.md) |
-| **iOS** | [`ios/`](ios/) | Keyboard extension | Scaffold — see [ios/README.md](ios/README.md) |
+| **iOS** | [`ios/`](ios/) | Keyboard extension + Action Extension (share sheet) | Scaffold — see [ios/README.md](ios/README.md) |
+| **Desktop** | [`desktop/`](desktop/) | System-tray "Convert clipboard" (Win/macOS/Linux) | See [desktop/README.md](desktop/README.md) |
 
 The core logic (parser, alias table, stamp renderer) is duplicated in Swift and Kotlin — the two cores produce identical output for the same input, and their test suites mirror each other so divergence is caught early (16 tests per side, JVM-only on the Kotlin side so no emulator needed).
 
@@ -49,11 +50,11 @@ Android is now the primary build. The iOS scaffold is kept intact in case the UX
 
 ## Roadmap
 
-- **v0.1** — Android `ACTION_PROCESS_TEXT` + iOS keyboard extension. *(current)*
-- **v0.2** — Smart defaults: infer target zones from contact history (Android first — contact API is freer).
-- **v0.3** — Play Store + TestFlight distribution.
-- **v0.4** — iOS share-sheet extension (removes the keyboard-swap problem on iOS).
-- **v0.5** — Desktop port (macOS via Catalyst, Windows via plain Kotlin/JVM tray app sharing the `core` module).
+- **v0.1** — Android `ACTION_PROCESS_TEXT` + iOS keyboard extension. *(shipped)*
+- **v0.2** — Smart defaults: infer target zones from contact history. *(shipped on Android — Settings → "Suggest from contacts" reads phone-number country codes and proposes zones; numbers stay on-device)*
+- **v0.3** — Play Store + TestFlight distribution. *(CI pipelines wired in `.github/workflows/{android,ios}-release.yml` — Android attaches signed APK to GitHub Releases; iOS uploads to TestFlight. Both gated on a small set of repo secrets; see the workflow headers.)*
+- **v0.4** — iOS share-sheet extension. *(shipped — `TimeTwisterShareExtension` Action Extension, registered in `ios/project.yml`)*
+- **v0.5** — Desktop port. *(shipped — Kotlin/JVM tray app in `desktop/`, reuses the Android core sources directly; macOS Catalyst still pending and tracked under iOS)*
 
 ## License
 

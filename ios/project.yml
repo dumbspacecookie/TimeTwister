@@ -34,6 +34,8 @@ targets:
         embed: true
       - target: TimeTwisterKeyboard
         embed: true
+      - target: TimeTwisterShareExtension
+        embed: true
     info:
       path: TimeTwister/Info.plist
       properties:
@@ -75,6 +77,39 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.timetwister.app.keyboard
     entitlements:
       path: TimeTwisterKeyboard/TimeTwisterKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.timetwister
+
+  TimeTwisterShareExtension:
+    # Action Extension — closest iOS analogue to Android's ACTION_PROCESS_TEXT.
+    # Activated from any host app that exposes selected text via the share sheet
+    # (Notes, Mail, Safari, etc.). Reads the text, splices a multi-TZ stamp in
+    # place of the detected time, returns the modified text. Needs no
+    # "Allow Full Access" — text is handed in via NSExtensionContext.
+    type: app-extension
+    platform: iOS
+    sources:
+      - TimeTwisterShareExtension
+    dependencies:
+      - target: TimeTwisterCore
+        embed: false
+    info:
+      path: TimeTwisterShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: TimeTwister
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ui-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ActionViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 0
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.timetwister.app.share
+    entitlements:
+      path: TimeTwisterShareExtension/TimeTwisterShareExtension.entitlements
       properties:
         com.apple.security.application-groups:
           - group.com.timetwister

@@ -1,8 +1,14 @@
-name: Release to TestFlight
+name: iOS · Release to TestFlight
 
 # Opt-in workflow. Push a tag like v0.1.0 or run manually.
-# Requires an Apple Developer account ($99/yr) and several secrets — see README
-# section "TestFlight from CI" for setup instructions.
+# Requires an Apple Developer account ($99/yr) and these repo secrets:
+#   APPLE_TEAM_ID                — 10-char team identifier (App Store Connect → Membership)
+#   BUILD_CERTIFICATE_BASE64     — base64 of a .p12 Distribution cert export
+#   BUILD_CERTIFICATE_PASSWORD   — password for the .p12 above
+#   APPSTORE_KEY_ID              — App Store Connect API key id
+#   APPSTORE_ISSUER_ID           — issuer id for that key
+#   APPSTORE_PRIVATE_KEY         — full text of the AuthKey_*.p8 file
+# Without all of these set, this workflow will not pass the cert/profile import steps.
 
 on:
   push:
@@ -79,6 +85,14 @@ jobs:
         uses: apple-actions/download-provisioning-profiles@v3
         with:
           bundle-id: com.timetwister.app.keyboard
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+
+      - name: Download share extension profile
+        uses: apple-actions/download-provisioning-profiles@v3
+        with:
+          bundle-id: com.timetwister.app.share
           issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
           api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}

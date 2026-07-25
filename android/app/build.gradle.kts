@@ -1,8 +1,29 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// Release-signing creds. Read first from app/keystore.properties (gitignored),
+// falling back to env vars so CI can sign without committing anything. If neither
+// is present the release build is left unsigned — useful for assembleRelease smoke
+// checks without forcing every contributor to generate a keystore.
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("app/keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun signingProp(key: String, env: String): String? =
+    keystoreProps.getProperty(key) ?: System.getenv(env)
+
+val releaseStoreFilePath = signingProp("storeFile", "TIMETWISTER_KEYSTORE_PATH")
+val releaseStorePassword = signingProp("storePassword", "TIMETWISTER_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingProp("keyAlias", "TIMETWISTER_KEY_ALIAS")
+val releaseKeyPassword = signingProp("keyPassword", "TIMETWISTER_KEY_PASSWORD")
+val releaseSigningAvailable = releaseStoreFilePath != null && releaseStorePassword != null &&
+    releaseKeyAlias != null && releaseKeyPassword != null
 
 android {
     namespace = "com.timetwister.app"
@@ -16,6 +37,17 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        if (releaseSigningAvailable) {
+            create("release") {
+                storeFile = file(releaseStoreFilePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -23,6 +55,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            if (releaseSigningAvailable) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

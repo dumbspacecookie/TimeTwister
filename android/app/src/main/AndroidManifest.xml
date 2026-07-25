@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        Optional permission. Only used by the "Suggest zones from contacts" button
+        in the settings screen — we read the country code off contact phone numbers
+        to propose target zones. Phone numbers themselves never leave the device,
+        and the app still works fully if the user denies this.
+    -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

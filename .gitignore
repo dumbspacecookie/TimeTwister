@@ -17,13 +17,20 @@ Pods/
 Carthage/Build/
 
 # Android / Gradle
-android/.gradle/
+.gradle/
 android/**/build/
 android/local.properties
+desktop/local.properties
 android/captures/
 android/.cxx/
 android/app/release/
 *.iml
+
+# Android signing — keep keystores + their creds out of the repo.
+# CI signs via TIMETWISTER_KEYSTORE_* env vars instead.
+android/app/keystore.properties
+*.jks
+*.keystore
 
 # macOS
 .DS_Store

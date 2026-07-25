@@ -38,6 +38,21 @@ public enum TimeConverter {
         return "\(sourceLabel) \(sourceTag) (\(others.joined(separator: " · ")))"
     }
 
+    /// Splice a rendered stamp back into the original text in place of the detected
+    /// range. Pure helper — used by both the keyboard extension (when the user taps
+    /// a suggestion) and the Action Extension (which gets the full selection from
+    /// the share sheet). If no time is detected the input is returned unchanged.
+    public static func splice(
+        input: String,
+        targets: [TimeZone],
+        now: Date = Date()
+    ) -> String {
+        guard let detected = TimeParser.detectLast(in: input) else { return input }
+        let stamp = renderStamp(for: detected, targets: targets, now: now)
+        let ns = input as NSString
+        return ns.replacingCharacters(in: detected.range, with: stamp)
+    }
+
     /// Produce the actual UTC instant the user meant. We assume "today" in the
     /// source zone — if that instant is already in the past, roll forward one day
     /// so suggestions stay useful in evening chats.

@@ -61,6 +61,37 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             test | tee test.log | xcpretty || (cat test.log && exit 1)
 
+      # Unsigned device-architecture IPA. NOT installable directly — meant to be
+      # re-signed locally via Sideloadly / AltStore using a free Apple ID, which
+      # lets you sideload to your own iPhone without paying the $99/yr Apple
+      # Developer Program fee. The signed install is good for 7 days; re-sign
+      # weekly to keep using it.
+      - name: Build unsigned IPA (for Sideloadly)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project TimeTwister.xcodeproj \
+            -scheme TimeTwister \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -archivePath build/TimeTwister-unsigned.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive | tee archive.log | xcpretty || (cat archive.log && exit 1)
+          # Hand-pack into an IPA: just a Payload/ dir containing the .app, zipped.
+          mkdir -p build/ipa/Payload
+          cp -R build/TimeTwister-unsigned.xcarchive/Products/Applications/TimeTwister.app build/ipa/Payload/
+          (cd build/ipa && zip -qr ../TimeTwister-unsigned.ipa Payload)
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: timetwister-unsigned-ipa
+          path: ios/build/TimeTwister-unsigned.ipa
+          retention-days: 14
+
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -69,6 +100,7 @@ jobs:
           path: |
             ios/build.log
             ios/test.log
+            ios/archive.log
           retention-days: 7
 
   android:

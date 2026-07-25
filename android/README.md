@@ -62,7 +62,40 @@ cd android
 
 Send the APK over any channel (WhatsApp, Signal, email). Recipients need to allow "Install unknown apps" for whichever app they opened the APK with — Android 13+ walks them through it.
 
-**For a signed release APK or Play Store upload**, we'll set that up later — one-time Google Play Developer account is $25.
+### Signed release APK
+
+`assembleRelease` builds an unsigned APK out of the box (useful for smoke checks). To produce a signed APK suitable for Play Store upload or sideload distribution, generate a keystore once and point the build at it:
+
+```bash
+# One-time keystore generation. Use a strong password and KEEP THIS FILE SAFE —
+# losing it means you can never push updates to the same app listing.
+keytool -genkey -v -keystore timetwister-release.jks \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -alias timetwister
+```
+
+Then either drop a `app/keystore.properties` (gitignored) next to the module:
+
+```properties
+storeFile=/abs/path/to/timetwister-release.jks
+storePassword=...
+keyAlias=timetwister
+keyPassword=...
+```
+
+…or set the equivalent env vars (preferred for CI):
+
+```bash
+export TIMETWISTER_KEYSTORE_PATH=/abs/path/to/timetwister-release.jks
+export TIMETWISTER_KEYSTORE_PASSWORD=...
+export TIMETWISTER_KEY_ALIAS=timetwister
+export TIMETWISTER_KEY_PASSWORD=...
+
+cd android && gradle :app:assembleRelease
+# APK: app/build/outputs/apk/release/app-release.apk
+```
+
+If none of those are set, `assembleRelease` still builds — just unsigned. Play Store / Google Play Developer account is $25 one-time.
 
 ## Using it
 

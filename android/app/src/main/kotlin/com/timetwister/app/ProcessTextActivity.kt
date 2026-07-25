@@ -4,8 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import com.timetwister.core.TimeConverter
-import com.timetwister.core.TimeParser
 import kotlinx.coroutines.runBlocking
+import java.time.ZonedDateTime
 
 /**
  * Receives android.intent.action.PROCESS_TEXT when the user long-presses text in any
@@ -27,25 +27,16 @@ class ProcessTextActivity : Activity() {
         val input = intent?.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString().orEmpty()
         val readOnly = intent?.getBooleanExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, false) ?: false
 
-        val detected = TimeParser.detectLast(input)
-        if (detected == null || readOnly) {
-            setResult(RESULT_CANCELED)
-            finish()
-            return
-        }
-
         // DataStore is async; we block here because the activity lifecycle is about to end
         // anyway. Worst case the user waits a few ms for first read.
         val targets = runBlocking { UserPreferences(applicationContext).targetZones() }
-        val stamp = TimeConverter.renderStamp(detected, targets)
+        val out = TimeConverter.maybeSplice(input, targets, readOnly, ZonedDateTime.now())
 
-        val out = buildString {
-            append(input, 0, detected.range.first)
-            append(stamp)
-            append(input, detected.range.last + 1, input.length)
+        if (out == null) {
+            setResult(RESULT_CANCELED)
+        } else {
+            setResult(RESULT_OK, Intent().putExtra(Intent.EXTRA_PROCESS_TEXT, out))
         }
-
-        setResult(RESULT_OK, Intent().putExtra(Intent.EXTRA_PROCESS_TEXT, out))
         finish()
     }
 }

@@ -1,6 +1,9 @@
-# TimeTwister
+# TimeTwister — iOS
 
-An iOS custom keyboard that converts timezone references inline, before you send. Type `5pm CT`, tap a suggestion, and it expands to `5pm CT (6pm ET · 3pm PT)` — works in iMessage, WhatsApp, Signal, Telegram, Slack, anywhere you type.
+Two iOS entry points share the same `TimeTwisterCore` parser:
+
+1. **Custom keyboard** (`TimeTwisterKeyboard`) — converts time references inline as you type. Works in any app. Trade-off: user must switch from system keyboard to TimeTwister for each conversion + grant "Allow Full Access".
+2. **Action Extension** (`TimeTwisterShareExtension`) — long-press / select text in any cooperating host (Notes, Mail, Safari, Messages-with-bridge apps), hit *Share* → **TimeTwister**, and the selection comes back with the stamp spliced in. No keyboard swap, no Full Access toggle. This is the closest iOS analogue to Android's `ACTION_PROCESS_TEXT`.
 
 ## Why a keyboard (and not an iMessage app)
 
