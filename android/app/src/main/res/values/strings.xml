@@ -1,6 +1,90 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        Every user-facing string lives here rather than inline in Kotlin. The manifest
+        declares supportsRtl="true", which is a promise the app can only keep if the text
+        is translatable and laid out by the framework rather than hardcoded at the call site.
+    -->
+
     <string name="app_name">TimeTwister</string>
     <!-- Shown in the selection toolbar when the user long-presses a time reference. -->
     <string name="process_text_label">TimeTwister</string>
+
+    <!-- ProcessTextActivity: the only feedback the user ever gets from the main flow. -->
+    <string name="toast_no_time_found">No time found — try \"5pm CT\" or \"17:00 ET\"</string>
+    <string name="toast_readonly_copied">%1$s — copied (this text is read-only)</string>
+    <string name="toast_selection_too_long">Selection too long — select just the line with the time</string>
+
+    <!-- Settings screen -->
+    <string name="settings_intro">Long-press a time (e.g. \"5pm CT\") in any messaging app, pick TimeTwister from the selection menu, and your zones get appended inline.</string>
+    <string name="section_how_to_use">How to use</string>
+    <string name="section_preview">Preview</string>
+    <string name="section_your_timezones">Your timezones</string>
+    <string name="action_expand">Show</string>
+    <string name="action_collapse">Hide</string>
+
+    <!-- Onboarding / how-to. These six steps were previously only in android/README.md,
+         which no installed user will ever read. -->
+    <string name="onboarding_tagline">Rewrite a time into every zone your group cares about, without leaving the chat.</string>
+    <string name="howto_step_1">Pick your zones below — every stamp includes them.</string>
+    <string name="howto_step_2">In any messaging app, type a time like \"5pm CT\", \"17:00 ET\" or \"5:30pm pacific\".</string>
+    <string name="howto_step_3">Long-press the phrase to select it.</string>
+    <string name="howto_step_4">Tap the ⋮ overflow in the selection toolbar — TimeTwister is in there, not on the first row.</string>
+    <string name="howto_step_5">Tap TimeTwister. The selection becomes \"5pm CT (6pm ET · 3pm PT)\".</string>
+    <string name="howto_step_6">Send.</string>
+    <string name="howto_overflow_hint">TimeTwister almost never appears on the first row of the selection toolbar. Tap the ⋮ to find it.</string>
+    <string name="howto_readonly_note">On someone else\'s message the text can\'t be edited, so TimeTwister copies the converted time to your clipboard and shows it instead.</string>
+    <string name="howto_toolbar_mock_desc">Illustration of a text selection toolbar: Copy, Paste, Share, then an overflow button that reveals TimeTwister.</string>
+    <string name="mock_copy">Copy</string>
+    <string name="mock_paste">Paste</string>
+    <string name="mock_share">Share</string>
+    <string name="mock_overflow">⋮</string>
+    <string name="mock_message_prefix">meet at</string>
+    <string name="mock_message_time">5pm CT</string>
+    <string name="mock_overflow_other">Translate</string>
+    <string name="action_got_it">Got it</string>
+
+    <!-- Live preview -->
+    <string name="preview_label">Type anything with a time in it</string>
+    <string name="preview_default">lets do 5pm CT</string>
+    <string name="preview_empty">No time detected yet — try \"5pm CT\", \"17:00 ET\" or \"noon\".</string>
+    <string name="preview_help">This is exactly what TimeTwister would splice into your message.</string>
+
+    <!-- Zone list -->
+    <string name="zones_none">No target zones. Stamps will re-render the time but add no conversions.</string>
+    <string name="zones_too_many">%1$d zones makes the stamp long enough to be unreadable inline. %2$d or fewer keeps it skimmable.</string>
+    <string name="action_add_timezone">Add timezone</string>
+    <string name="remove_zone_desc">Remove %1$s</string>
+
+    <!-- Contacts suggestions -->
+    <string name="action_suggest_from_contacts">Suggest from contacts</string>
+    <string name="contacts_privacy_note">Reads country codes from your contacts to suggest zones. Numbers don\'t leave the device.</string>
+    <string name="suggestions_title">Suggested zones</string>
+    <string name="suggestions_body">Based on country codes in your contacts. Tap to add — already-added zones are skipped.</string>
+    <string name="suggestions_none_title">No suggestions</string>
+    <string name="suggestions_none_body">None of your contacts have international country codes we could match. You can add zones manually.</string>
+    <string name="action_add">Add</string>
+    <string name="label_added">added</string>
+    <string name="action_done">Done</string>
+    <string name="action_ok">OK</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_not_now">Not now</string>
+    <string name="action_open_settings">Open settings</string>
+    <plurals name="contact_count">
+        <item quantity="one">%1$s · %2$d contact</item>
+        <item quantity="other">%1$s · %2$d contacts</item>
+    </plurals>
+
+    <!-- Permission handling -->
+    <string name="permission_title">Contacts access needed</string>
+    <string name="permission_rationale">TimeTwister reads only the country code of each phone number to guess which zones your people are in. It never uploads anything. Without it, add zones by hand — the app works exactly the same.</string>
+    <string name="permission_blocked">Android won\'t ask again because contacts access was denied twice. You can turn it on in system settings, or just add zones by hand — the app works exactly the same.</string>
+
+    <!-- Timezone picker -->
+    <string name="picker_title">Add timezone</string>
+    <string name="picker_search_label">Search city, \"PST\", \"Eastern\", \"Britain\"…</string>
+    <string name="picker_section_common">Common</string>
+    <string name="picker_section_all">All timezones</string>
+    <string name="picker_no_matches">Nothing matches \"%1$s\". Try a city name, a country, or an abbreviation like PT.</string>
+    <string name="picker_row_desc">%1$s, %2$s</string>
 </resources>

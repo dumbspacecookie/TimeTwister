@@ -47,7 +47,9 @@ ios/
 
 ## CI (build without a Mac)
 
-`.github/workflows/ci.yml` runs on `macos-14` GitHub runners and builds + tests every push. No secrets needed — it builds for the Simulator with signing disabled. This is useful to catch errors while you're iterating on a Windows machine; it will not produce an installable IPA (unsigned IPAs won't load onto a device).
+`.github/workflows/ci.yml` runs the iOS job on `macos-15` GitHub runners and builds + tests every push. No secrets needed — it builds for the Simulator with signing disabled. This is useful to catch errors while you're iterating on a Windows machine; it will not produce an installable IPA (unsigned IPAs won't load onto a device).
+
+**This job has never gone green.** `project.yml` declared no `schemes:` block, so XcodeGen generated no schemes and every `xcodebuild -scheme ...` invocation failed before it compiled anything. A `schemes:` block now exists and CI selects the core tests with `-only-testing:TimeTwisterCoreTests`, but that has not yet been confirmed against a real runner — treat the iOS pipeline as unproven until you've seen a green run.
 
 ## Distribution to friends
 
@@ -56,9 +58,11 @@ ios/
 3. Add external testers via public link, up to 10,000
 4. Rebuild every 90 days (TestFlight build expiry)
 
-### TestFlight from CI (deferred — see roadmap v0.3)
+### TestFlight from CI (not done)
 
-`.github/workflows/release.yml` is wired to archive + upload to TestFlight on a `v*` tag, but the secrets aren't configured yet (this build is sideload-only for now). Setting it up needs an Apple Developer Program membership ($99/yr) and a one-time Mac session to export the signing cert; full secret list lives in the workflow file when we're ready.
+`.github/workflows/ios-release.yml` is wired to archive + upload to TestFlight on a `v*` tag, but none of its six Apple secrets are configured, so it has never completed a run and nothing has ever reached TestFlight. This build is sideload-only for now. Setting it up needs an Apple Developer Program membership ($99/yr) and a one-time Mac session to export the signing cert; the full secret list is in the header of that workflow file.
+
+(The old single `release.yml` was split into `android-release.yml` and `ios-release.yml`; references to `release.yml` elsewhere are stale.)
 
 ## Privacy posture
 
@@ -67,7 +71,9 @@ ios/
 
 ## Roadmap
 
-- v0.1: Core parser + suggestion bar in keyboard + basic settings
-- v0.2: Smart defaults (infer TZs from your contact history — requires Contacts permission, optional)
-- v0.3: macOS keyboard (via Mac Catalyst or a separate AppKit target)
-- v0.4: Recipient-specific TZ via share-sheet extension (one-tap "convert for Alex" before sending)
+iOS-local milestones. These are numbered independently of the project-level roadmap in the [root README](../README.md) — don't read `v0.3` here as the same thing as `v0.3` there.
+
+- v0.1: Core parser + suggestion bar in keyboard + basic settings — *built, never installed on a device from this repo*
+- v0.2: Smart defaults (infer TZs from your contact history — requires Contacts permission, optional) — *not started on iOS; exists on Android only*
+- v0.3: macOS keyboard (via Mac Catalyst or a separate AppKit target) — *not started*
+- v0.4: Recipient-specific TZ via share-sheet extension (one-tap "convert for Alex" before sending) — *the `TimeTwisterShareExtension` target exists and declares the activation rule; the recipient-picking part does not*

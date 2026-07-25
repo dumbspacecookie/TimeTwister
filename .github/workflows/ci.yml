@@ -10,11 +10,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: CI only ever reads the repo and uploads artifacts (which needs
+# no token scope). Without this block the job inherits the repo-default token,
+# which is read/write on many repos.
+permissions:
+  contents: read
+
 jobs:
   ios:
     name: iOS · Build & Test
-    runs-on: macos-14
-    timeout-minutes: 20
+    runs-on: macos-15
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ios
@@ -23,16 +29,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        # macos-14 runners ship with multiple Xcodes. Pin one so DerivedData
-        # and the Swift version stay stable across runs.
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Record toolchain versions
+        # Deliberately NOT pinned to a specific Xcode.app path. The old
+        # `xcode-select -s /Applications/Xcode_15.4.app` pin broke every time the
+        # runner image rotated its Xcodes, and 15.4 caps out at iOS 17.5
+        # simulators. Use the image default and record it instead.
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate
+
+      - name: Pick an available iPhone simulator
+        id: sim
+        # GitHub keeps only ~3 iOS runtimes per image, so a hard-coded
+        # `name=iPhone 15,OS=latest` destination rots without warning. Resolve a
+        # concrete, currently-available device at run time instead.
+        run: |
+          UDID=$(xcrun simctl list devices available --json | /usr/bin/python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          picked = None
+          for runtime, devices in sorted(runtimes.items()):
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable") and "iPhone" in device.get("name", ""):
+                      picked = (device["udid"], device["name"], runtime)
+          if picked is None:
+              sys.exit("no available iPhone simulator on this runner")
+          print(picked[0])
+          sys.stderr.write("using %s (%s)\n" % (picked[1], picked[2]))
+          ')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
 
       - name: Build (iOS Simulator, no signing)
         run: |
@@ -41,25 +74,30 @@ jobs:
             -project TimeTwister.xcodeproj \
             -scheme TimeTwister \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build | tee build.log | xcpretty || (cat build.log && exit 1)
+            build 2>&1 | tee build.log
 
       - name: Test TimeTwisterCore
+        # There is one scheme (TimeTwister); the core tests are a test action on it,
+        # selected with -only-testing. The old `-scheme TimeTwisterCoreTests` could
+        # never have worked — project.yml declared no schemes at all, and XcodeGen
+        # generates none unless asked.
         run: |
           set -o pipefail
           xcodebuild \
             -project TimeTwister.xcodeproj \
-            -scheme TimeTwisterCoreTests \
-            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -scheme TimeTwister \
+            -only-testing:TimeTwisterCoreTests \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            test | tee test.log | xcpretty || (cat test.log && exit 1)
+            test 2>&1 | tee test.log
 
       # Unsigned device-architecture IPA. NOT installable directly — meant to be
       # re-signed locally via Sideloadly / AltStore using a free Apple ID, which
@@ -79,7 +117,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            archive | tee archive.log | xcpretty || (cat archive.log && exit 1)
+            archive 2>&1 | tee archive.log
           # Hand-pack into an IPA: just a Payload/ dir containing the .app, zipped.
           mkdir -p build/ipa/Payload
           cp -R build/TimeTwister-unsigned.xcarchive/Products/Applications/TimeTwister.app build/ipa/Payload/
@@ -115,24 +153,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      # Both 17 and 21: Gradle itself runs on 21 (JAVA_HOME points at the last
+      # entry), while every module declares jvmToolchain(17). No toolchain
+      # resolver is configured, so Gradle can only find a 17 that already exists
+      # on the box — previously that was an accident of the ubuntu image
+      # happening to preinstall one. setup-java also exports JAVA_HOME_17_X64,
+      # which Gradle's auto-detection picks up.
+      - name: Set up JDKs 17 and 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: |
+            17
+            21
 
       - name: Setup Gradle
+        # No gradle-version pin — we invoke ./gradlew, so the version comes from
+        # gradle/wrapper/gradle-wrapper.properties, the same one humans get.
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
 
-      # Invoke `gradle` directly rather than `./gradlew` — the wrapper jar isn't
-      # committed to the repo (Android Studio regenerates it on first sync locally).
       - name: Build debug APK
-        run: gradle :app:assembleDebug
+        run: ./gradlew :app:assembleDebug --console=plain
 
       - name: Run core tests
-        run: gradle :core:test
+        run: ./gradlew :core:test --console=plain
+
+      - name: Run app unit tests
+        run: ./gradlew :app:testDebugUnitTest --console=plain
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            android/core/build/reports/tests/
+            android/app/build/reports/tests/
+          retention-days: 7
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -140,3 +197,40 @@ jobs:
           name: timetwister-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 14
+
+  desktop:
+    name: Desktop · Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDKs 17 and 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # desktop/ is a separate Gradle build that composes in android/core, and it
+      # has no wrapper of its own — reuse android's. Headless is fine: the only
+      # AWT-touching test (ClipboardRoundTripTest) self-skips via
+      # GraphicsEnvironment.isHeadless().
+      - name: Build & test desktop
+        run: ./android/gradlew -p desktop build --console=plain
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-test-reports
+          path: desktop/app/build/reports/tests/
+          retention-days: 7

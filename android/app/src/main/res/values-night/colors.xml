@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 baseline dark `surface`. Kept in sync with darkColorScheme() so the
+         launch window and the first composed frame are indistinguishable. -->
+    <color name="window_background">#FF1C1B1F</color>
+</resources>

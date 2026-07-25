@@ -28,13 +28,22 @@ class ContactZoneInferencer(private val context: Context) {
 
     /**
      * Scan the Contacts provider once and return suggested zones ranked by frequency.
-     * Caller is responsible for ensuring permission was granted; if it wasn't, we
-     * return an empty list rather than throwing — the UI then shows the "grant"
-     * affordance instead.
+     * Never throws: an empty list means "nothing to suggest", and the UI shows the
+     * grant / no-matches affordance instead.
+     *
+     * hasPermission() is a check, not a guarantee — it's TOCTOU by construction. The
+     * permission can be revoked between the check and the query (user toggles it in
+     * Settings while we're backgrounded, or Android auto-revokes it for an unused app),
+     * which surfaces as a SecurityException from the provider. The provider can also
+     * throw SQLiteException or die outright on some OEM builds. All of those used to
+     * crash the settings screen, because the caller launched this in a bare coroutine.
      */
     suspend fun suggest(): List<Suggestion> = withContext(Dispatchers.IO) {
         if (!hasPermission()) return@withContext emptyList()
+        runCatching { queryZoneCounts() }.getOrDefault(emptyList())
+    }
 
+    private fun queryZoneCounts(): List<Suggestion> {
         // One row per (contact_id, phone_number). We de-dupe by contact_id so a person
         // with three numbers in the same country only counts once toward that zone.
         val counts = mutableMapOf<ZoneId, MutableSet<Long>>()
@@ -45,7 +54,7 @@ class ContactZoneInferencer(private val context: Context) {
                 ContactsContract.CommonDataKinds.Phone.NUMBER,
             ),
             null, null, null,
-        ) ?: return@withContext emptyList()
+        ) ?: return emptyList()
 
         cursor.use { c ->
             val idCol = c.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
@@ -58,7 +67,7 @@ class ContactZoneInferencer(private val context: Context) {
             }
         }
 
-        counts.entries
+        return counts.entries
             .map { Suggestion(it.key, it.value.size) }
             .sortedByDescending { it.contactCount }
     }

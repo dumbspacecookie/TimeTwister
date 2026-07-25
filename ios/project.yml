@@ -7,7 +7,10 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    # Swift *language mode*, not a compiler version — the accepted values are
+    # 4.0 / 4.2 / 5.0 / 6.0. This said "5.9" (a toolchain version), which is not a
+    # valid SWIFT_VERSION. The compiler used is whatever the selected Xcode ships.
+    SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: "" # fill in your Apple Developer team ID
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
@@ -120,7 +123,38 @@ targets:
     sources:
       - TimeTwisterCoreTests
     dependencies:
+      # embed: true — this is a host-less logic-test bundle, so TimeTwisterCore has
+      # to be copied into the .xctest bundle itself or dyld can't find it at run time.
       - target: TimeTwisterCore
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.timetwister.core.tests
+
+# XcodeGen generates NO schemes unless they are declared here, and `xcodebuild
+# -scheme ...` cannot work without one. Both workflows referenced schemes that
+# never existed (`TimeTwister`, and a `TimeTwisterCoreTests` scheme that would
+# have needed a test action of its own) — which is why iOS CI has never gone
+# green. One scheme, with the core tests wired into its test action; CI selects
+# them with `-only-testing:TimeTwisterCoreTests`.
+schemes:
+  TimeTwister:
+    build:
+      targets:
+        TimeTwister: all
+        TimeTwisterCoreTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      coverageTargets:
+        - TimeTwisterCore
+      targets:
+        - TimeTwisterCoreTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

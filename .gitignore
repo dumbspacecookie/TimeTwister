@@ -31,6 +31,24 @@ android/app/release/
 android/app/keystore.properties
 *.jks
 *.keystore
+# android-release.yml decodes the keystore secret into this directory *inside the
+# workspace*, so it has to be ignored or a local reproduction of the workflow
+# leaves a committable private key behind.
+.keystore/
+
+# Apple signing material. A distribution cert or App Store Connect key exported
+# during a Mac session lands in the working tree as one of these — never commit them.
+*.p8
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.certSigningRequest
+ExportOptions.plist
+
+# Local secrets / env files
+.env
+.env.*
 
 # macOS
 .DS_Store

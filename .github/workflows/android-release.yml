@@ -1,14 +1,18 @@
-name: Android · Release APK
+name: Android · Release
 
-# Push a tag like v0.1.0 (or run manually) to produce a signed release APK and
-# attach it to a GitHub Release. Requires these repo secrets:
+# Push a tag like v0.1.0 (or run manually) to produce a signed release APK + AAB
+# and attach them to a GitHub Release. Requires these repo secrets:
 #   TIMETWISTER_KEYSTORE_BASE64    — base64-encoded .jks keystore file
 #   TIMETWISTER_KEYSTORE_PASSWORD  — keystore password
 #   TIMETWISTER_KEY_ALIAS          — key alias (default: timetwister)
 #   TIMETWISTER_KEY_PASSWORD       — key password
-# Without the keystore secret set, the workflow still builds an *unsigned*
-# release APK and uploads it as a workflow artifact — useful for smoke
-# checks without forcing every contributor to share a keystore.
+# Without the keystore secret set, the workflow still builds *unsigned* release
+# artifacts and uploads them as workflow artifacts — useful for smoke checks
+# without forcing every contributor to share a keystore.
+#
+# This workflow does NOT publish to Google Play. It builds the .aab that Play
+# requires (new apps cannot be submitted as APKs) but uploading it is still a
+# manual step — there is no Play service-account secret wired up.
 
 on:
   push:
@@ -16,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       attach_to_release:
-        description: "Attach signed APK to the matching GitHub Release"
+        description: "Attach signed artifacts to the matching GitHub Release"
         required: false
         default: "false"
 
@@ -29,7 +33,7 @@ permissions:
 
 jobs:
   build:
-    name: Build signed APK
+    name: Build signed APK + AAB
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -40,60 +44,122 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      # Gradle runs on 21; every module declares jvmToolchain(17) and no toolchain
+      # resolver is configured, so a real JDK 17 has to be present on the box.
+      - name: Set up JDKs 17 and 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: |
+            17
+            21
 
       - name: Setup Gradle
+        # No gradle-version pin — ./gradlew fixes the version via the committed
+        # wrapper, which is what humans run.
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
+
+      - name: Derive version from tag
+        id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/v}" ]; then
+            NAME="${REF_NAME#v}"
+          else
+            NAME="0.0.0-dev.${RUN_NUMBER}"
+          fi
+          # versionCode must be a strictly increasing integer — Play rejects a
+          # re-used one, and GitHub Releases built from different tags would
+          # otherwise ship indistinguishable APKs. major*10000 + minor*100 + patch
+          # gives a monotonic code straight from the tag; anything unparseable
+          # falls back to the (monotonic) run number.
+          if [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            CODE=$(( ${BASH_REMATCH[1]} * 10000 + ${BASH_REMATCH[2]} * 100 + ${BASH_REMATCH[3]} ))
+          else
+            CODE="$RUN_NUMBER"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Building versionName=$NAME versionCode=$CODE"
 
       - name: Decode keystore (if secret present)
         id: keystore
         env:
           KEYSTORE_B64: ${{ secrets.TIMETWISTER_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.TIMETWISTER_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TIMETWISTER_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TIMETWISTER_KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "No keystore secret — release APK will be unsigned"
+          set -euo pipefail
+          # An unset GitHub secret expands to an empty string, not to nothing — so
+          # every one of these has to be checked for emptiness, not just presence.
+          # A partial set is a configuration mistake, not an "unsigned build".
+          if [ -z "$KEYSTORE_B64" ] && [ -z "$KEYSTORE_PASSWORD" ] && [ -z "$KEY_ALIAS" ] && [ -z "$KEY_PASSWORD" ]; then
+            echo "No signing secrets — release artifacts will be unsigned"
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "Signing secrets are partially configured — set all four or none." >&2
+            exit 1
+          fi
+          # ../.keystore is inside the workspace; it is gitignored so a local
+          # reproduction of this workflow can't leave a committable private key.
           mkdir -p ../.keystore
           echo "$KEYSTORE_B64" | base64 --decode > ../.keystore/release.jks
           echo "path=$(realpath ../.keystore/release.jks)" >> "$GITHUB_OUTPUT"
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Build release APK
+      - name: Build release APK + AAB
         env:
           TIMETWISTER_KEYSTORE_PATH: ${{ steps.keystore.outputs.path }}
           TIMETWISTER_KEYSTORE_PASSWORD: ${{ secrets.TIMETWISTER_KEYSTORE_PASSWORD }}
           TIMETWISTER_KEY_ALIAS: ${{ secrets.TIMETWISTER_KEY_ALIAS }}
           TIMETWISTER_KEY_PASSWORD: ${{ secrets.TIMETWISTER_KEY_PASSWORD }}
-        run: gradle :app:assembleRelease
-
-      - name: Locate APK
-        id: apk
+        # Play requires an App Bundle for new apps; the APK stays for sideloading
+        # and for attaching to the GitHub Release.
         run: |
+          ./gradlew :app:assembleRelease :app:bundleRelease \
+            -Ptimetwister.versionCode=${{ steps.version.outputs.code }} \
+            -Ptimetwister.versionName=${{ steps.version.outputs.name }} \
+            --console=plain
+
+      - name: Locate artifacts
+        id: artifacts
+        run: |
+          set -euo pipefail
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
-          echo "path=$APK" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename $APK)" >> "$GITHUB_OUTPUT"
+          AAB=$(ls app/build/outputs/bundle/release/*.aab | head -n 1)
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+          echo "aab=$AAB" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: timetwister-release-apk
-          path: android/${{ steps.apk.outputs.path }}
+          path: android/${{ steps.artifacts.outputs.apk }}
           retention-days: 90
 
-      - name: Attach APK to GitHub Release
-        # Only on tag pushes that produced a signed APK; manual runs need the input.
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: timetwister-release-aab
+          path: android/${{ steps.artifacts.outputs.aab }}
+          retention-days: 90
+
+      - name: Attach artifacts to GitHub Release
+        # Only on tag pushes that produced signed artifacts; manual runs need the input.
         if: |
           steps.keystore.outputs.signed == 'true' &&
           (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.attach_to_release == 'true')
-        uses: softprops/action-gh-release@v2
+        # Pinned to a full commit SHA, not the mutable v2 tag: this step holds a
+        # write-scoped token, so a tag repoint would be a supply-chain foothold.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: android/${{ steps.apk.outputs.path }}
+          files: |
+            android/${{ steps.artifacts.outputs.apk }}
+            android/${{ steps.artifacts.outputs.aab }}
           fail_on_unmatched_files: true

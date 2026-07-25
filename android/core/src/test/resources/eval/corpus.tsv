@@ -1,0 +1,270 @@
+# TimeTwister golden eval corpus
+# =============================================================================
+# Tab-separated. Read by EvalCorpusTest. THIS FILE MUST STAY UTF-8 (no BOM) --
+# the expected outputs contain U+00B7 MIDDLE DOT and the loader rejects U+FFFD.
+#
+# Columns (exactly 6, tab-separated, no tabs inside a field):
+#   id             stable row id. Never renumber a live row; append new ids.
+#   input          the text handed to the parser. Escapes: \t \n \r \\ \uXXXX
+#                  (astral chars are written as a UTF-16 surrogate pair, e.g.
+#                  \uD83C\uDF89 = U+1F389. Leading/trailing spaces of a field
+#                  are written \u0020 so editors cannot silently eat them.)
+#   expect_detect  yes | no -- what TimeParser.detect(input).isNotEmpty() SHOULD return
+#   expect_output  the exact full string TimeConverter.splice SHOULD return,
+#                  or the literal token  =input  when nothing should change
+#   category       see below -- decides whether the row can fail the build
+#   note           free text; for ambiguous/unverified rows this carries the reasoning
+#
+# CATEGORIES
+#   blocking (a mismatch fails the build):
+#     must_detect      happy paths, alias coverage, formatting
+#     must_not_detect  the false-positive suite
+#     whitespace       separator and padding variants
+#     unicode          emoji / RTL / non-Latin splice-index behaviour
+#     boundary         out-of-range hours and minutes
+#     idempotent       a second pass must not change the text again
+#   reporting only (printed, never fails the build):
+#     known_gap        DESIRED behaviour that the code does not yet produce.
+#                      These are real defects, encoded so the score shows them.
+#     ambiguous        the right answer is genuinely debatable. expect_output is
+#                      a PROPOSAL for the owner to adjudicate; note says why.
+#     unverified       expected value derived by reading the source but not yet
+#                      confirmed against a real JVM run. Promote or fix after
+#                      the first green run.
+#
+# DETERMINISM
+#   Every row is pinned by the harness, never by wall-clock time:
+#     now             2026-05-18T09:00:00-04:00[America/New_York]  (EvalCorpusTest.NOW)
+#     targets         America/Chicago, America/New_York, America/Los_Angeles,
+#                     Europe/London  -> rendered as CT, ET, PT, UK in that order
+#     system default  pinned to America/New_York for the duration of the class
+#
+#   Rows that depend on the fixed clock (they would drift with a real clock):
+#     - EVERY row whose expect_output contains a rendered stamp. The rendered
+#       times themselves are clock-independent, but the UTC offsets used to
+#       compute them are date-dependent (2026-05-18 = US DST on, UK BST on,
+#       AU/NZ DST off). Change NOW and most expect_output values change.
+#   Rows that additionally depend on the pinned SYSTEM DEFAULT zone (they have
+#   no explicit zone token, so the parser falls back to ZoneId.systemDefault()):
+#     D025 D026 D027 D032 D033 D050 G013 G014 G015 G016 G017 G018 G019 G020 
+#     G101 G102 G103 G104 A008
+#   If the pin is removed these become machine-dependent -- that fallback is the
+#   parser's one untestable seam.
+#
+# ADDING A ROW: see README.md in this directory.
+# =============================================================================
+id	input	expect_detect	expect_output	category	note
+D001	lets do 5pm CT	yes	lets do 5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	canonical happy path; mirrors README example
+D002	5pm CT	yes	5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	match at index 0, nothing around it
+D003	meet at 5pm CT tomorrow	yes	meet at 5pm CT (6pm ET · 3pm PT · 11pm UK) tomorrow	must_detect	prefix and suffix both preserved
+D004	call at 9am ET	yes	call at 9am ET (8am CT · 6am PT · 2pm UK)	must_detect	am branch
+D005	standup 9:30am ET	yes	standup 9:30am ET (8:30am CT · 6:30am PT · 2:30pm UK)	must_detect	explicit minutes survive into every target
+D006	landing at 17:00 ET	yes	landing at 5pm ET (4pm CT · 2pm PT · 10pm UK)	must_detect	24h input normalises to 12h output
+D007	12:00 ET	yes	12pm ET (11am CT · 9am PT · 5pm UK)	must_detect	24h noon normalises to 12pm not 12am
+D008	0:30 ET	yes	12:30am ET (11:30pm CT -1d · 9:30pm PT -1d · 5:30am UK)	must_detect	24h hour 0 renders as 12:30am [expectation updated 2026-07-25: day markers + DST-correct labels]
+D009	ship by 11pm utc	yes	ship by 11pm UTC (6pm CT · 7pm ET · 4pm PT · 12am UK +1d)	must_detect	lowercase tz token [expectation updated 2026-07-25: day markers + DST-correct labels]
+D010	call at 5PM CT	yes	call at 5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	uppercase am/pm
+D011	5Pm Ct	yes	5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	mixed case throughout
+D012	call at 5p.m. CT	yes	call at 5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	dotted p.m. form
+D013	call at 5 p.m. CT	yes	call at 5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	dotted form with a space before it
+D014	at 6 am ET	yes	at 6am ET (5am CT · 3am PT · 11am UK)	must_detect	space between hour and am
+D015	12 pm ET	yes	12pm ET (11am CT · 9am PT · 5pm UK)	must_detect	12 pm with a space is midday
+D016	demo at 2:15pm eastern	yes	demo at 2:15pm ET (1:15pm CT · 11:15am PT · 7:15pm UK)	must_detect	long-form zone word
+D017	call at 12pm CT	yes	call at 12pm CT (1pm ET · 10am PT · 6pm UK)	must_detect	12pm is 12:00 not 00:00
+D018	deploy at 12am ET	yes	deploy at 12am ET (11pm CT -1d · 9pm PT -1d · 5am UK)	must_detect	12am is 00:00 not 12:00 [expectation updated 2026-07-25: day markers + DST-correct labels]
+D019	12:30am ET	yes	12:30am ET (11:30pm CT -1d · 9:30pm PT -1d · 5:30am UK)	must_detect	12:30am is 00:30 [expectation updated 2026-07-25: day markers + DST-correct labels]
+D020	12:30pm ET	yes	12:30pm ET (11:30am CT · 9:30am PT · 5:30pm UK)	must_detect	12:30pm is 12:30
+D021	call at 8:05am ET	yes	call at 8:05am ET (7:05am CT · 5:05am PT · 1:05pm UK)	must_detect	leading-zero minutes
+D022	call at 7:00pm ET	yes	call at 7pm ET (6pm CT · 4pm PT · 12am UK +1d)	must_detect	:00 minutes collapse to the bare-hour format [expectation updated 2026-07-25: day markers + DST-correct labels]
+D023	call at noon CT	yes	call at 12pm CT (1pm ET · 10am PT · 6pm UK)	must_detect	noon keyword with a zone
+D024	deploy at midnight ET	yes	deploy at 12am ET (11pm CT -1d · 9pm PT -1d · 5am UK)	must_detect	midnight keyword with a zone [expectation updated 2026-07-25: day markers + DST-correct labels]
+D025	see you at noon	yes	see you at 12pm ET (11am CT · 9am PT · 5pm UK)	must_detect	noon self-disambiguates, no tz needed
+D026	see you at midnight	yes	see you at 12am ET (11pm CT -1d · 9pm PT -1d · 5am UK)	must_detect	midnight self-disambiguates [expectation updated 2026-07-25: day markers + DST-correct labels]
+D027	NOON	yes	12pm ET (11am CT · 9am PT · 5pm UK)	must_detect	keyword is case-insensitive
+D028	MIDNIGHT ET	yes	12am ET (11pm CT -1d · 9pm PT -1d · 5am UK)	must_detect	uppercase keyword plus zone [expectation updated 2026-07-25: day markers + DST-correct labels]
+D029	noon utc	yes	12pm UTC (7am CT · 8am ET · 5am PT · 1pm UK)	must_detect	keyword routed through a non-US zone
+D030	midnight pacific	yes	12am PT (2am CT · 3am ET · 8am UK)	must_detect	keyword plus long-form zone word
+D031	how about 5:30pm pacific	yes	how about 5:30pm PT (7:30pm CT · 8:30pm ET · 1:30am UK +1d)	must_detect	long-form pacific [expectation updated 2026-07-25: day markers + DST-correct labels]
+D032	5pm	yes	5pm ET (4pm CT · 2pm PT · 10pm UK)	must_detect	no tz at all -> falls back to the system zone (pinned to ET here)
+D033	5:45pm	yes	5:45pm ET (4:45pm CT · 2:45pm PT · 10:45pm UK)	must_detect	no tz, with minutes
+D034	kickoff 08:00 CET	yes	kickoff 8am CEST (1am CT · 2am ET · 11pm PT -1d · 7am UK)	must_detect	24h with a leading zero, European zone [expectation updated 2026-07-25: day markers + DST-correct labels]
+D035	window 23:59 UTC	yes	window 11:59pm UTC (6:59pm CT · 7:59pm ET · 4:59pm PT · 12:59am UK +1d)	must_detect	last representable minute of the day [expectation updated 2026-07-25: day markers + DST-correct labels]
+D036	00:00 UTC hard cutoff	yes	12am UTC (7pm CT -1d · 8pm ET -1d · 5pm PT -1d · 1am UK) hard cutoff	must_detect	hour 0 minute 0 in 24h form [expectation updated 2026-07-25: day markers + DST-correct labels]
+D037	1am UTC	yes	1am UTC (8pm CT -1d · 9pm ET -1d · 6pm PT -1d · 2am UK)	must_detect	single-digit hour, UTC source [expectation updated 2026-07-25: day markers + DST-correct labels]
+D038	meet at 7pm IST tomorrow	yes	meet at 7pm IST (8:30am CT · 9:30am ET · 6:30am PT · 2:30pm UK) tomorrow	must_detect	half-hour-offset source zone (+5:30)
+D039	call 7pm IST	yes	call 7pm IST (8:30am CT · 9:30am ET · 6:30am PT · 2:30pm UK)	must_detect	IST again, shorter carrier sentence
+D040	7:30 am india	yes	7:30am IST (9pm CT -1d · 10pm ET -1d · 7pm PT -1d · 3am UK)	must_detect	half-hour zone via the long-form alias [expectation updated 2026-07-25: day markers + DST-correct labels]
+D041	23:00 hawaii	yes	11pm HST (4am CT +1d · 5am ET +1d · 2am PT +1d · 10am UK +1d)	must_detect	no-DST zone (Pacific/Honolulu) as source [expectation updated 2026-07-25: day markers + DST-correct labels]
+D042	06:00 tokyo	yes	6am JST (4pm CT -1d · 5pm ET -1d · 2pm PT -1d · 10pm UK -1d)	must_detect	far-east source, rolls a day forward internally [expectation updated 2026-07-25: day markers + DST-correct labels]
+D043	tomorrow at 10am london	yes	tomorrow at 10am UK (4am CT · 5am ET · 2am PT)	must_detect	source zone is also a target -> filtered out of the parens
+D044	Standup is at 9:15am ET, ok?	yes	Standup is at 9:15am ET (8:15am CT · 6:15am PT · 2:15pm UK), ok?	must_detect	punctuation immediately after the match
+D045	deadline 6pm PT.	yes	deadline 6pm PT (8pm CT · 9pm ET · 2am UK +1d).	must_detect	trailing full stop [expectation updated 2026-07-25: day markers + DST-correct labels]
+D046	deadline 6pm PT!	yes	deadline 6pm PT (8pm CT · 9pm ET · 2am UK +1d)!	must_detect	trailing exclamation [expectation updated 2026-07-25: day markers + DST-correct labels]
+D047	6pm PT, then dinner	yes	6pm PT (8pm CT · 9pm ET · 2am UK +1d), then dinner	must_detect	trailing comma [expectation updated 2026-07-25: day markers + DST-correct labels]
+D048	"6pm PT"	yes	"6pm PT (8pm CT · 9pm ET · 2am UK +1d)"	must_detect	wrapped in quotes [expectation updated 2026-07-25: day markers + DST-correct labels]
+D049	le me know by 4pm mountain	yes	le me know by 4pm MT (5pm CT · 6pm ET · 3pm PT · 11pm UK)	must_detect	long-form mountain
+D050	the 5 pm crowd	yes	the 5pm ET (4pm CT · 2pm PT · 10pm UK) crowd	must_detect	idiomatic but genuinely a time reference
+D051	call at 5pm ET on 10/5	yes	call at 5pm ET (4pm CT · 2pm PT · 10pm UK) on 10/5	must_detect	a date-looking token nearby must not be touched
+D052	9am CT standup, demo at 2pm PT	yes	9am CT standup, demo at 2pm PT (4pm CT · 5pm ET · 10pm UK)	must_detect	two times -> detectLast wins, only the last is stamped
+Z001	sync at 3pm et	yes	sync at 3pm ET (2pm CT · 12pm PT · 8pm UK)	must_detect	alias token 'et' resolves and renders its short label
+Z002	sync at 3pm est	yes	sync at 3pm ET (2pm CT · 12pm PT · 8pm UK)	must_detect	alias token 'est' resolves and renders its short label
+Z003	sync at 3pm edt	yes	sync at 3pm ET (2pm CT · 12pm PT · 8pm UK)	must_detect	alias token 'edt' resolves and renders its short label
+Z004	sync at 3pm ct	yes	sync at 3pm CT (4pm ET · 1pm PT · 9pm UK)	must_detect	alias token 'ct' resolves and renders its short label
+Z005	sync at 3pm cst	yes	sync at 3pm CT (4pm ET · 1pm PT · 9pm UK)	must_detect	alias token 'cst' resolves and renders its short label
+Z006	sync at 3pm cdt	yes	sync at 3pm CT (4pm ET · 1pm PT · 9pm UK)	must_detect	alias token 'cdt' resolves and renders its short label
+Z007	sync at 3pm mt	yes	sync at 3pm MT (4pm CT · 5pm ET · 2pm PT · 10pm UK)	must_detect	alias token 'mt' resolves and renders its short label
+Z008	sync at 3pm mst	yes	sync at 3pm MT (4pm CT · 5pm ET · 2pm PT · 10pm UK)	must_detect	alias token 'mst' resolves and renders its short label
+Z009	sync at 3pm mdt	yes	sync at 3pm MT (4pm CT · 5pm ET · 2pm PT · 10pm UK)	must_detect	alias token 'mdt' resolves and renders its short label
+Z010	sync at 3pm pt	yes	sync at 3pm PT (5pm CT · 6pm ET · 11pm UK)	must_detect	alias token 'pt' resolves and renders its short label
+Z011	sync at 3pm pst	yes	sync at 3pm PT (5pm CT · 6pm ET · 11pm UK)	must_detect	alias token 'pst' resolves and renders its short label
+Z012	sync at 3pm pdt	yes	sync at 3pm PT (5pm CT · 6pm ET · 11pm UK)	must_detect	alias token 'pdt' resolves and renders its short label
+Z013	sync at 3pm akst	yes	sync at 3pm AKDT (6pm CT · 7pm ET · 4pm PT · 12am UK +1d)	must_detect	alias token 'akst' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z014	sync at 3pm akdt	yes	sync at 3pm AKDT (6pm CT · 7pm ET · 4pm PT · 12am UK +1d)	must_detect	alias token 'akdt' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z015	sync at 3pm hst	yes	sync at 3pm HST (8pm CT · 9pm ET · 6pm PT · 2am UK +1d)	must_detect	alias token 'hst' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z016	sync at 3pm utc	yes	sync at 3pm UTC (10am CT · 11am ET · 8am PT · 4pm UK)	must_detect	alias token 'utc' resolves and renders its short label
+Z017	sync at 3pm gmt	yes	sync at 3pm UTC (10am CT · 11am ET · 8am PT · 4pm UK)	must_detect	alias token 'gmt' resolves and renders its short label
+Z018	sync at 3pm bst	yes	sync at 3pm UK (9am CT · 10am ET · 7am PT)	must_detect	alias token 'bst' resolves and renders its short label
+Z019	sync at 3pm cet	yes	sync at 3pm CEST (8am CT · 9am ET · 6am PT · 2pm UK)	must_detect	alias token 'cet' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z020	sync at 3pm cest	yes	sync at 3pm CEST (8am CT · 9am ET · 6am PT · 2pm UK)	must_detect	alias token 'cest' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z021	sync at 3pm eet	yes	sync at 3pm EEST (7am CT · 8am ET · 5am PT · 1pm UK)	must_detect	alias token 'eet' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z022	sync at 3pm eest	yes	sync at 3pm EEST (7am CT · 8am ET · 5am PT · 1pm UK)	must_detect	alias token 'eest' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z023	sync at 3pm ist	yes	sync at 3pm IST (4:30am CT · 5:30am ET · 2:30am PT · 10:30am UK)	must_detect	alias token 'ist' resolves and renders its short label
+Z024	sync at 3pm jst	yes	sync at 3pm JST (1am CT · 2am ET · 11pm PT -1d · 7am UK)	must_detect	alias token 'jst' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z025	sync at 3pm kst	yes	sync at 3pm KST (1am CT · 2am ET · 11pm PT -1d · 7am UK)	must_detect	alias token 'kst' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z026	sync at 3pm sgt	yes	sync at 3pm SGT (2am CT · 3am ET · 12am PT · 8am UK)	must_detect	alias token 'sgt' resolves and renders its short label
+Z027	sync at 3pm hkt	yes	sync at 3pm HKT (2am CT · 3am ET · 12am PT · 8am UK)	must_detect	alias token 'hkt' resolves and renders its short label
+Z028	sync at 3pm aest	yes	sync at 3pm AEST (12am CT · 1am ET · 10pm PT -1d · 6am UK)	must_detect	alias token 'aest' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z029	sync at 3pm aedt	yes	sync at 3pm AEST (12am CT · 1am ET · 10pm PT -1d · 6am UK)	must_detect	alias token 'aedt' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z030	sync at 3pm nzst	yes	sync at 3pm NZST (10pm CT -1d · 11pm ET -1d · 8pm PT -1d · 4am UK)	must_detect	alias token 'nzst' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z031	sync at 3pm nzdt	yes	sync at 3pm NZST (10pm CT -1d · 11pm ET -1d · 8pm PT -1d · 4am UK)	must_detect	alias token 'nzdt' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z032	sync at 3pm eastern	yes	sync at 3pm ET (2pm CT · 12pm PT · 8pm UK)	must_detect	alias token 'eastern' resolves and renders its short label
+Z033	sync at 3pm central	yes	sync at 3pm CT (4pm ET · 1pm PT · 9pm UK)	must_detect	alias token 'central' resolves and renders its short label
+Z034	sync at 3pm mountain	yes	sync at 3pm MT (4pm CT · 5pm ET · 2pm PT · 10pm UK)	must_detect	alias token 'mountain' resolves and renders its short label
+Z035	sync at 3pm pacific	yes	sync at 3pm PT (5pm CT · 6pm ET · 11pm UK)	must_detect	alias token 'pacific' resolves and renders its short label
+Z036	sync at 3pm alaska	yes	sync at 3pm AKDT (6pm CT · 7pm ET · 4pm PT · 12am UK +1d)	must_detect	alias token 'alaska' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z037	sync at 3pm hawaii	yes	sync at 3pm HST (8pm CT · 9pm ET · 6pm PT · 2am UK +1d)	must_detect	alias token 'hawaii' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z038	sync at 3pm london	yes	sync at 3pm UK (9am CT · 10am ET · 7am PT)	must_detect	alias token 'london' resolves and renders its short label
+Z039	sync at 3pm tokyo	yes	sync at 3pm JST (1am CT · 2am ET · 11pm PT -1d · 7am UK)	must_detect	alias token 'tokyo' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z040	sync at 3pm singapore	yes	sync at 3pm SGT (2am CT · 3am ET · 12am PT · 8am UK)	must_detect	alias token 'singapore' resolves and renders its short label
+Z041	sync at 3pm sydney	yes	sync at 3pm AEST (12am CT · 1am ET · 10pm PT -1d · 6am UK)	must_detect	alias token 'sydney' resolves and renders its short label [expectation updated 2026-07-25: day markers + DST-correct labels]
+Z042	sync at 3pm india	yes	sync at 3pm IST (4:30am CT · 5:30am ET · 2:30am PT · 10:30am UK)	must_detect	alias token 'india' resolves and renders its short label
+W001	meet 5pm  CT	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)	whitespace	two spaces between time and zone
+W002	meet 5pm\tCT	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)	whitespace	tab between time and zone
+W003	meet 5pm\nCT	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)	whitespace	newline between time and zone
+W004	meet 5 pm CT	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)	whitespace	space between hour and meridiem
+W005	\u0020 5pm CT \u0020	yes	\u0020 5pm CT (6pm ET · 3pm PT · 11pm UK) \u0020	whitespace	leading and trailing spaces on the whole string are preserved
+W006	ok 5pm CT\nbye	yes	ok 5pm CT (6pm ET · 3pm PT · 11pm UK)\nbye	whitespace	newline after the match
+W007	5pm CT\n\nsee you	yes	5pm CT (6pm ET · 3pm PT · 11pm UK)\n\nsee you	whitespace	blank line after the match
+W008	a\tb 5pm CT	yes	a\tb 5pm CT (6pm ET · 3pm PT · 11pm UK)	whitespace	tab elsewhere in the string
+N001	room 5 is open	no	=input	must_not_detect	bare number, no meridiem and no zone
+N002	9-5 job	no	=input	must_not_detect	shift notation
+N003	v2.5	no	=input	must_not_detect	version string
+N004	10/5	no	=input	must_not_detect	date or fraction
+N005	Catch-22	no	=input	must_not_detect	title with a number
+N006	CT scan	no	=input	must_not_detect	zone token with no time attached
+N007	MT Everest	no	=input	must_not_detect	zone token as a proper noun
+N008	MST is a mountain range	no	=input	must_not_detect	zone token leading a sentence
+N009	PT session at the gym	no	=input	must_not_detect	PT means physical therapy here
+N010	SGT Pepper	no	=input	must_not_detect	SGT is a rank
+N011	EST. 1984	no	=input	must_not_detect	EST. means established
+N012	call 555-123-4567	no	=input	must_not_detect	US phone number
+N013	+1 555 0199	no	=input	must_not_detect	E.164-ish phone number
+N014	dial 415 555 1212	no	=input	must_not_detect	phone number in spaced groups
+N015	1-800-555-1212	no	=input	must_not_detect	toll-free number
+N016	it costs $5.99	no	=input	must_not_detect	price
+N017	50% off	no	=input	must_not_detect	percentage
+N018	ETA 5 minutes	no	=input	must_not_detect	duration, not a clock time
+N019	in 5 min	no	=input	must_not_detect	duration shorthand
+N020	I'll be 5 minutes	no	=input	must_not_detect	duration in prose
+N021	5th of never	no	=input	must_not_detect	ordinal suffix blocks the word boundary
+N022	finish 3rd	no	=input	must_not_detect	ordinal
+N023	part 3	no	=input	must_not_detect	section number
+N024	agenda item 5	no	=input	must_not_detect	list index
+N025	Fahrenheit 451	no	=input	must_not_detect	three-digit number
+N026	24/7 support	no	=input	must_not_detect	always-on notation
+N027	route 66	no	=input	must_not_detect	highway number
+N028	Apollo 11	no	=input	must_not_detect	mission number
+N029	the 90s were wild	no	=input	must_not_detect	decade
+N030	5-10 people	no	=input	must_not_detect	numeric range
+N031	2 of 5 done	no	=input	must_not_detect	progress counter
+N032	weighs 5 lbs	no	=input	must_not_detect	unit that is not a zone
+N033	build 42 failed	no	=input	must_not_detect	build number
+N034	HTTP 404 not found	no	=input	must_not_detect	status code
+N035	port 8080 is busy	no	=input	must_not_detect	port number
+N036	she scored 12 pts	no	=input	must_not_detect	pts is not pt
+N037	Q3 2026	no	=input	must_not_detect	quarter and year
+N038	iPhone 15 pro	no	=input	must_not_detect	product name
+N039	Level 9 alert	no	=input	must_not_detect	level number
+N040	covid-19	no	=input	must_not_detect	disease name
+N041	A1 sauce	no	=input	must_not_detect	alphanumeric product
+N042	the answer is 42	no	=input	must_not_detect	bare number at end of string
+N043	flight AA 100 pt	no	=input	must_not_detect	three-digit run cannot start a match, so 'pt' is never reached
+N044	PST is 3 hours behind	no	=input	must_not_detect	zone token and a number that are unrelated
+N045	9 to 5	no	=input	must_not_detect	spelled-out range
+N046	meeting is a noonish thing	no	=input	must_not_detect	noon must not match inside a longer word
+N047	midnights are hard	no	=input	must_not_detect	midnight must not match inside a longer word
+N048	5ish pm ET	no	=input	must_not_detect	hedged time is not parseable, so leave it alone
+N049	no times here at all	no	=input	must_not_detect	plain prose
+N050		no	=input	must_not_detect	empty string
+B001	25:00 et	no	=input	boundary	hour 25 is out of range and must be rejected
+B002	24:00 ET	no	=input	boundary	hour 24 is out of range (not a synonym for midnight)
+B003	13pm et	no	=input	boundary	13pm is not a valid 12-hour clock reading
+B004	0pm ET	no	=input	boundary	0pm is not a valid 12-hour clock reading
+B005	99pm	no	=input	boundary	two-digit nonsense hour
+B006	5:99 pm	no	=input	boundary	minute 99 is out of range
+U001	\uD83C\uDF89 5pm CT \uD83C\uDF89	yes	\uD83C\uDF89 5pm CT (6pm ET · 3pm PT · 11pm UK) \uD83C\uDF89	unicode	astral emoji either side; pins UTF-16 splice indices
+U002	\uD83C\uDF89\uD83C\uDF89 5pm CT	yes	\uD83C\uDF89\uD83C\uDF89 5pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	two astral emoji before the match (4 UTF-16 units of offset)
+U003	\uD83C\uDF895pm CT	yes	\uD83C\uDF895pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	astral emoji immediately before the digit, no space
+U004	meet 5pm CT\uD83C\uDF89	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)\uD83C\uDF89	unicode	astral emoji immediately after the zone token
+U005	done \uD83D\uDC4D meet at 6pm ET \uD83D\uDE80 ok	yes	done \uD83D\uDC4D meet at 6pm ET (5pm CT · 3pm PT · 11pm UK) \uD83D\uDE80 ok	unicode	emoji on both sides plus surrounding words
+U006	\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00 3pm PT	yes	\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00 3pm PT (5pm CT · 6pm ET · 11pm UK)	unicode	five astral emoji = 10 UTF-16 units before the match
+U007	مرحبا 5pm CT	yes	مرحبا 5pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	RTL Arabic before the match
+U008	5pm CT مرحبا	yes	5pm CT (6pm ET · 3pm PT · 11pm UK) مرحبا	unicode	RTL Arabic after the match
+U009	שלום 5pm CT שלום	yes	שלום 5pm CT (6pm ET · 3pm PT · 11pm UK) שלום	unicode	RTL Hebrew both sides
+U010	مساء 7pm IST غدا	yes	مساء 7pm IST (8:30am CT · 9:30am ET · 6:30am PT · 2:30pm UK) غدا	unicode	RTL Arabic around a half-hour-offset zone
+U011	会議 5pm CT	yes	会議 5pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	CJK before the match, space separated
+U012	café at 5pm CT	yes	café at 5pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	accented Latin nearby
+U013	naïve 5pm CT	yes	naïve 5pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	combining-capable Latin nearby
+U014	über 5pm CT	yes	über 5pm CT (6pm ET · 3pm PT · 11pm UK)	unicode	umlaut nearby
+U015	5pm CT\u00A0	yes	5pm CT (6pm ET · 3pm PT · 11pm UK)\u00A0	unicode	trailing NBSP after the zone token still leaves a word boundary
+I001	no times here at all	no	=input	idempotent	second pass over text the tool declined to touch
+I002	room 5 is open	no	=input	idempotent	second pass over a rejected false positive
+I003	Fahrenheit 451	no	=input	idempotent	second pass over a rejected numeric
+G001	won 3-1 pt	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. sports score: '1 pt' is read as 1am Pacific and the message is garbled
+G002	we won 5-3 ct	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. sports score: '3 ct' is read as 3am Central
+G003	score was 12-3 mt	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. sports score: '3 mt' is read as 3am Mountain
+G004	the top 5 est. results	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. '5 est.' (estimated) is read as 5am Eastern
+G005	bus 5 est arrival	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. 'est' as an abbreviation for estimated
+G006	chapter 12 est	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. '12 est' is read as noon Eastern
+G007	Section 5 pt 2	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. 'pt' as an abbreviation for part
+G008	12 pt font	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. 'pt' as the typographic point unit - very common in design chat
+G009	3.5 pt	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. decimal followed by a unit; the '.5' is picked up as an hour
+G010	$5 pt	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. currency amount followed by a unit
+G011	converted 5 ct to usd	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. 'ct' as cents
+G012	half past 5 ET	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. 'half past 5' is silently rendered as 5am - emitting a wrong time is worse than emitting nothing
+G013	9:5 am	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. malformed clock time; the parser salvages '5 am' and renders '9:5am ET'
+G014	call 7pm NPT	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. unsupported zone (Nepal): the zone token is dropped and the time is relabelled with the system zone
+G015	call 7pm ACST	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. unsupported zone (Australian Central), same relabelling bug
+G016	call 7pm MSK	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. unsupported zone (Moscow), same relabelling bug
+G017	call 7pm WAT	no	=input	must_not_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. unsupported zone (West Africa), same relabelling bug
+G018	meet 5pm\u00A0CT	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. NBSP between time and zone (iOS/Android keyboards emit these): Java \s is ASCII-only so CT is dropped
+G019	meet 5pm\u202FCT	yes	meet 5pm CT (6pm ET · 3pm PT · 11pm UK)	must_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. narrow NBSP separator, same cause
+G020	5pm CTです	yes	5pm CT (6pm ET · 3pm PT · 11pm UK)です	must_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. Japanese text touching the zone token kills the trailing word boundary, so CT is dropped
+G021	12 noon ET	yes	12pm ET (11am CT · 9am PT · 5pm UK)	must_detect	FIXED 2026-07-25 (parser hardening wave); was known_gap. the leading '12' is left behind, producing '12 12pm ET (...)'
+G101	lets do 5pm CT (6pm ET · 3pm PT · 11pm UK)	yes	=input	idempotent	FIXED 2026-07-25. detect() DOES report the source time (it is a real time); the guarantee is that splice re-renders the SAME stamp in place rather than nesting a new one, so a second pass is a no-op. Re-running after a settings change refreshes the conversions by design.
+G102	5pm CT (6pm ET · 3pm PT · 11pm UK)	yes	=input	idempotent	FIXED 2026-07-25. detect() DOES report the source time (it is a real time); the guarantee is that splice re-renders the SAME stamp in place rather than nesting a new one, so a second pass is a no-op. Re-running after a settings change refreshes the conversions by design.
+G103	12pm ET (11am CT · 9am PT · 5pm UK)	yes	=input	idempotent	FIXED 2026-07-25. detect() DOES report the source time (it is a real time); the guarantee is that splice re-renders the SAME stamp in place rather than nesting a new one, so a second pass is a no-op. Re-running after a settings change refreshes the conversions by design.
+G104	meet at 7pm IST (8:30am CT · 9:30am ET · 6:30am PT · 2:30pm UK) tomorrow	yes	=input	idempotent	FIXED 2026-07-25. detect() DOES report the source time (it is a real time); the guarantee is that splice re-renders the SAME stamp in place rather than nesting a new one, so a second pass is a no-op. Re-running after a settings change refreshes the conversions by design.
+A001	5pm-6pm ET	yes	5pm-6pm ET (5pm CT · 3pm PT · 11pm UK)	ambiguous	time range. Proposed: stamp only the last match (current). Arguably both ends should convert.
+A002	between 4 and 6pm ET	yes	between 4 and 6pm ET (5pm CT · 3pm PT · 11pm UK)	ambiguous	Proposed: stamp only '6pm ET' (current). Arguably the bare '4' should inherit ET.
+A003	5pm ET/8pm PT	yes	5pm ET/8pm PT (10pm CT · 11pm ET · 4am UK +1d)	ambiguous	user already did the conversion by hand. Proposed: stamp the last (current). Arguably a no-op. [expectation updated 2026-07-25: day markers + DST-correct labels]
+A004	2pm sydney and 9am ET	yes	2pm sydney and 9am ET (8am CT · 6am PT · 2pm UK)	ambiguous	two zones in one sentence. Proposed: last wins (current). Arguably stamp both.
+A005	(6pm PT)	yes	(6pm PT (8pm CT · 9pm ET · 2am UK +1d))	ambiguous	already parenthesised; current output nests parens. Proposed: accept nesting rather than special-case. [expectation updated 2026-07-25: day markers + DST-correct labels]
+A006	5pm est/edt	yes	5pm ET (4pm CT · 2pm PT · 10pm UK)	ambiguous	current output leaves a dangling '/edt'. Proposed: refuse rather than half-rewrite. [expectation updated 2026-07-25: day markers + DST-correct labels]
+A007	17h00 CET	no	=input	ambiguous	European 17h00 notation is currently unparsed. Proposed: leave as out of scope for now.
+A008	tomorrow 9am	yes	tomorrow 9am ET (8am CT · 6am PT · 2pm UK)	ambiguous	'tomorrow' is ignored; the roll-forward heuristic may still land on today. Proposed: current.
+V001	\uD835\uDFDDpm CT	no	=input	unverified	MATHEMATICAL DOUBLE-STRUCK FIVE. Java \d is [0-9] without UNICODE_CHARACTER_CLASS so this should not match - unverified on a real JVM.
+V002	会議5pm CT	no	=input	unverified	CJK touching the digit removes the leading word boundary (Java Bound uses Character.isLetterOrDigit) - unverified on a real JVM.
+V003	5pmには	yes	5pm ET (4pm CT · 2pm PT · 10pm UK)には	unverified	Japanese particle right after 'pm' removes the trailing word boundary - unverified on a real JVM. [expectation updated 2026-07-25: day markers + DST-correct labels]
+V004	\u200B5pm CT	yes	​5pm CT (6pm ET · 3pm PT · 11pm UK)	unverified	zero-width space before the match; assumed to be a non-word char in Java. Unverified on a real JVM. [expectation updated 2026-07-25: day markers + DST-correct labels]
+V005	5pm CT\u200B	yes	5pm CT (6pm ET · 3pm PT · 11pm UK)​	unverified	zero-width space after the zone token. Unverified on a real JVM. [expectation updated 2026-07-25: day markers + DST-correct labels]

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0B1220</color>
+    <!-- Material 3 baseline light `surface`. See values-night/colors.xml for the dark twin. -->
+    <color name="window_background">#FFFFFBFE</color>
 </resources>

@@ -51,4 +51,32 @@ class UserConfigTest {
         // Junk-only file → defaults so the app keeps working.
         assertTrue(cfg.targetZones().any { it.id == "America/New_York" })
     }
+
+    /** Removing the last zone is a deliberate choice, not "unset" — the defaults must
+     *  not silently reappear. */
+    @Test fun emptyListPersistsAsEmptyRatherThanReviveDefaults() {
+        val cfg = UserConfig(tmp.root.toPath().resolve("zones.txt"))
+        cfg.setTargetZones(listOf(ZoneId.of("Europe/London")))
+        cfg.setTargetZones(emptyList())
+        assertEquals(emptyList<ZoneId>(), cfg.targetZones())
+    }
+
+    /** A hand-written file with no zones in it is genuinely ambiguous, so it keeps the
+     *  forgiving behaviour. Only app-written files are trusted verbatim. */
+    @Test fun handWrittenEmptyFileStillFallsBackToDefaults() {
+        val path = tmp.root.toPath().resolve("zones.txt")
+        Files.writeString(path, "# just a comment\n\n")
+        assertTrue(UserConfig(path).targetZones().any { it.id == "America/New_York" })
+    }
+
+    @Test fun writeFailureIsReportedNotThrown() {
+        // Parent exists as a *file*, so createDirectories/writeString cannot succeed.
+        val blocker = tmp.root.toPath().resolve("blocked")
+        Files.writeString(blocker, "not a directory")
+        val cfg = UserConfig(blocker.resolve("zones.txt"))
+        assertTrue(
+            "a failed write must come back as Result.failure, not an exception",
+            cfg.setTargetZones(listOf(ZoneId.of("Asia/Tokyo"))).isFailure,
+        )
+    }
 }

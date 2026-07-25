@@ -8,7 +8,12 @@ name: iOS · Release to TestFlight
 #   APPSTORE_KEY_ID              — App Store Connect API key id
 #   APPSTORE_ISSUER_ID           — issuer id for that key
 #   APPSTORE_PRIVATE_KEY         — full text of the AuthKey_*.p8 file
-# Without all of these set, this workflow will not pass the cert/profile import steps.
+# None of these are configured today, so this workflow has never completed a run.
+#
+# Third-party actions below are pinned to full commit SHAs rather than tags. They
+# receive the distribution certificate, its password, and the App Store Connect
+# private key; a mutable tag repointed upstream would hand over the whole signing
+# identity.
 
 on:
   push:
@@ -23,10 +28,15 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# Least privilege: this job uploads to Apple, not to GitHub. It never needs to
+# write to the repo.
+permissions:
+  contents: read
+
 jobs:
   archive-and-upload:
     name: Archive & Upload
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     defaults:
       run:
@@ -42,8 +52,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+      - name: Record toolchain versions
+        # Not pinned to a specific Xcode.app — the old 15.4 pin broke whenever the
+        # image rotated its Xcodes. Use the image default and record it.
+        run: |
+          xcodebuild -version
+          swift --version
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -62,35 +76,31 @@ jobs:
         run: xcodegen generate
 
       - name: Import signing certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.BUILD_CERTIFICATE_PASSWORD }}
 
-      - name: Download provisioning profiles
-        uses: apple-actions/download-provisioning-profiles@v3
+      # The action takes one bundle-id per call, so it's invoked once per target:
+      # container app, keyboard extension, share extension.
+      - name: Download provisioning profile (container app)
+        uses: apple-actions/download-provisioning-profiles@e11c25fa97f0f9b4e7f5da47484e25a0cb6f17a3 # v3
         with:
           bundle-id: ${{ env.BUNDLE_ID }}
           issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
           api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
-          # Keyboard extension has its own bundle id; fetch its profile too.
-        env:
-          # Download a second profile for the keyboard extension bundle id.
-          # The action doesn't support multiple bundle-ids in one call, so we
-          # call it twice.
-          _: ""
 
-      - name: Download keyboard extension profile
-        uses: apple-actions/download-provisioning-profiles@v3
+      - name: Download provisioning profile (keyboard extension)
+        uses: apple-actions/download-provisioning-profiles@e11c25fa97f0f9b4e7f5da47484e25a0cb6f17a3 # v3
         with:
           bundle-id: com.timetwister.app.keyboard
           issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
           api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
 
-      - name: Download share extension profile
-        uses: apple-actions/download-provisioning-profiles@v3
+      - name: Download provisioning profile (share extension)
+        uses: apple-actions/download-provisioning-profiles@e11c25fa97f0f9b4e7f5da47484e25a0cb6f17a3 # v3
         with:
           bundle-id: com.timetwister.app.share
           issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -99,15 +109,28 @@ jobs:
 
       - name: Set build number
         id: bn
+        # workflow_dispatch inputs are attacker-influenced text. Passing them
+        # through env keeps them out of the script body, where `${{ }}` would be
+        # substituted before bash ever sees it (shell injection).
+        env:
+          INPUT_BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ -n "${{ github.event.inputs.build_number }}" ]; then
-            echo "value=${{ github.event.inputs.build_number }}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          if [ -n "$INPUT_BUILD_NUMBER" ]; then
+            VALUE="$INPUT_BUILD_NUMBER"
           else
             # CI run number is monotonic within a repo; fine for TestFlight.
-            echo "value=${{ github.run_number }}" >> $GITHUB_OUTPUT
+            VALUE="$RUN_NUMBER"
           fi
+          case "$VALUE" in
+            ''|*[!0-9]*) echo "build_number must be a positive integer, got: $VALUE" >&2; exit 1 ;;
+          esac
+          echo "value=$VALUE" >> "$GITHUB_OUTPUT"
 
       - name: Archive
+        env:
+          BUILD_NUMBER: ${{ steps.bn.outputs.value }}
         run: |
           set -o pipefail
           xcodebuild \
@@ -116,12 +139,15 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/TimeTwister.xcarchive \
-            CURRENT_PROJECT_VERSION=${{ steps.bn.outputs.value }} \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            archive | xcpretty
+            archive 2>&1 | tee archive.log
 
       - name: Export IPA
         run: |
+          set -euo pipefail
+          # ExportOptions.plist is generated here rather than committed — it embeds
+          # the team ID. It's gitignored so a local run can't commit it.
           cat > ExportOptions.plist <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -146,14 +172,21 @@ jobs:
             -exportArchive \
             -archivePath build/TimeTwister.xcarchive \
             -exportOptionsPlist ExportOptions.plist \
-            -exportPath build/export | xcpretty
+            -exportPath build/export 2>&1 | tee export.log
 
       - name: Upload to TestFlight
         env:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        # TODO: `altool --upload-app` is deprecated by Apple in favour of
+        # `xcrun notarytool` for notarisation and, for App Store submission,
+        # either `xcodebuild -exportArchive -exportOptionsPlist` with
+        # `<key>destination</key><string>upload</string>` or the Transporter
+        # (`iTMSTransporter`) CLI. It still works today but is on borrowed time;
+        # switch when this pipeline is first exercised for real.
         run: |
+          set -euo pipefail
           mkdir -p ~/.appstoreconnect/private_keys
           echo "$APPSTORE_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8
           xcrun altool --upload-app \
@@ -167,5 +200,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TimeTwister-ipa
-          path: build/export/*.ipa
+          # `defaults.run.working-directory` applies to `run:` steps only — an
+          # action's inputs are resolved from the workspace root, so this path has
+          # to be repo-relative.
+          path: ios/build/export/*.ipa
           retention-days: 30
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-logs
+          path: |
+            ios/archive.log
+            ios/export.log
+          retention-days: 7

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-mode counterpart of values/themes.xml. Same style name, dark parent, so the
+         window that exists before Compose starts already matches darkColorScheme(). -->
+    <style name="Theme.TimeTwister" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

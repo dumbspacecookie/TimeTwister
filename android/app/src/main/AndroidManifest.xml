@@ -30,13 +30,18 @@
             ACTION_PROCESS_TEXT — the primary entry point. When the user selects text in
             any app and picks "TimeTwister" from the selection toolbar, Android launches
             this activity with the selected text as an extra. We transform and return it.
-            Theme.NoDisplay keeps us invisible — we never draw UI, just mutate and finish.
+
+            Translucent.NoTitleBar, not NoDisplay: we still draw no content, but NoDisplay
+            forbids the window from ever being shown, which also suppresses Toasts posted
+            before finish(). That turned "no time in your selection" and "this message is
+            read-only" into identical silent no-ops — indistinguishable from a broken app.
+            Translucent keeps us invisible while letting us speak.
         -->
         <activity
             android:name=".ProcessTextActivity"
             android:exported="true"
             android:label="@string/process_text_label"
-            android:theme="@android:style/Theme.NoDisplay">
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.PROCESS_TEXT" />
                 <category android:name="android.intent.category.DEFAULT" />

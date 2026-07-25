@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Compose owns the actual visuals; this XML theme is just a placeholder so
-         AndroidManifest has something to reference before Compose takes over. -->
-    <style name="Theme.TimeTwister" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+        Compose owns the actual visuals, but this XML theme still decides what the window
+        looks like *before* the first Compose frame. It used to be pinned to the Light
+        parent with no values-night/ counterpart, so a dark-mode user got a white window
+        flash on every cold launch and then a dark UI painted on top of it.
+
+        The parent is switched per-configuration (see values-night/themes.xml) rather than
+        via android:Theme.DeviceDefault.DayNight because that is API 29+, and minSdk is 26.
+        Below API 29 there is no system dark mode to honour anyway, so the light branch is
+        the correct answer there.
+    -->
+    <style name="Theme.TimeTwister" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Matches Material 3's baseline light `surface` so the pre-Compose window and the
+             first Compose frame are the same colour. -->
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>
