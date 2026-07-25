@@ -33,21 +33,35 @@ Test loop (no Android SDK needed for the core):
 
 ## Ranked work
 
-### 1. Run the app on an emulator — *the biggest gap*
+### 1. ~~Run the app on an emulator~~ — **DONE 2026-07-25: it works**
 
-Everything shipped for usability today — first-run onboarding, the live editable
-preview, the read-only→clipboard path, dark mode, the zone-picker search — has
-been compiled but never seen. The stated goal is "super usable"; right now nobody
-has looked at it.
+AVD `tw35` (API 35, Pixel 6, x86_64, hardware-accelerated) created and booted;
+debug APK installed and driven via `adb`. **No crashes and no ANRs across every
+path exercised.**
 
-Standing up an AVD on this machine makes that verifiable, and makes
-instrumentation tests possible (which decides item 6).
+Verified on a real Android runtime, not by reasoning:
 
-- [ ] Install `emulator` + `system-images;android-35;google_apis;x86_64`, create an AVD
-- [ ] Walk the six-step flow the onboarding claims: select → long-press → `⋮` → TimeTwister
-- [ ] Verify the three previously-silent paths now speak: no detection, read-only, oversized selection
-- [ ] Confirm no white flash on launch in dark mode
-- [ ] Screenshot the result
+| path | result |
+|---|---|
+| First-run onboarding | Renders. The Compose-drawn toolbar mock shows `⋮` highlighted with TimeTwister *inside* the overflow — the step that used to be invisible |
+| Read-only selection (`can we do 5pm CT`) | Toast: **"5pm CT (6pm ET · 4pm MT · 3pm PT) — copied (this text is read-only)"**. Previously a guaranteed silent no-op, and the most intuitive first thing a user tries |
+| No detection (`lets meet at 5`) | Toast: **"No time found — try "5pm CT" or "17:00 ET""** — actionable, not generic |
+| False positive (`use 12 pt font`) | Declines and says so. The headline P0, confirmed end-to-end |
+| Live preview | Splices as you type: `lets do 5pm CT (6pm ET · 4pm MT · 3pm PT)` |
+| Dark mode | Clean dark surfaces, and the launch window is dark — no white flash |
+
+Screens: `01-firstrun`, `02-settings`, `04-readonly-toast`, `05-nodetect-toast`,
+`06-falsepositive`, `07-darkmode`, `08-dark-settled`.
+
+Relaunch the emulator with:
+
+```powershell
+& "$env:ANDROID_HOME\emulator\emulator.exe" -avd tw35 -no-snapshot-load -gpu swiftshader_indirect
+adb install -r android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+Still unverified by hand: the zone-picker search, the contacts-permission denial
+path, the >4-zone cap warning, and rotation state retention.
 
 ### 2. ~~Decide whether Swift can be verified on Windows~~ — **ANSWERED 2026-07-25: yes, with one fix**
 
