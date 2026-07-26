@@ -125,8 +125,18 @@ object TimeParser {
             # front of the stamp as "12 12pm ET (…)".
             (?: 12 $SP* )? (?<keyword>noon|midnight)
           |
+            # Military / 24-hour-without-a-colon, e.g. "1700 UTC", "0930 ET".
+            # The valid range is written into the pattern rather than checked
+            # afterwards, so "2500" and "1899" simply are not this shape. Listed
+            # before the general hour branch so four digits win over two.
+            # A zone is REQUIRED for this form — see the check in detect().
+            (?<mil>(?:[01]\d|2[0-3])[0-5]\d)
+          |
             (?<hour>\d{1,2})
-            (?: : (?<minute>\d{2}) )?
+            # A dot is accepted as a minute separator, but only conditionally —
+            # see the sep check in detect(). "5.30pm" is how a lot of the world
+            # writes half past five; "3.50 pt" is a measurement.
+            (?: (?<sep>[:.]) (?<minute>\d{2}) )?
             (?: $SP* (?<ampm>am|pm|a\.m\.|p\.m\.) )?
         )
         (?:
@@ -380,25 +390,58 @@ object TimeParser {
                 if (follower != null && follower.lowercase() !in ZONE_SUFFIX_WORDS) continue
             }
 
-            val (hour24, minute) = when (keywordRaw) {
-                "noon" -> 12 to 0
-                "midnight" -> 0 to 0
+            val (hour24, minute) = when {
+                keywordRaw == "noon" -> 12 to 0
+                keywordRaw == "midnight" -> 0 to 0
+                // "1700 UTC". Two restrictions, both learned by running it:
+                //
+                // A bare four-digit number is a year, a price, a count or a flight
+                // number far more often than a time, so an explicit zone is
+                // required — which is also how anyone who writes this form writes
+                // it. ("in 1700 the war ended" must survive.)
+                //
+                // And the zone has to be at least three characters. Every
+                // two-letter abbreviation we accept collides with a unit or an
+                // ordinary abbreviation in exactly this position: "1500 MT" is
+                // metric tons, "2000 PT" is physical-therapy sessions, "1200 CT" is
+                // CT scans. All three were being rewritten mid-sentence. Three
+                // characters keeps the canonical spellings — UTC, GMT, EST, CET,
+                // "0900 pacific" — and costs us "1700 ET", which is a real usage
+                // and is recorded as a known gap rather than pretended away.
+                //
+                // The pattern has already restricted the digits to 0000-2359.
+                m.groups["mil"] != null -> {
+                    if (!hasTz || (tzRaw?.length ?: 0) < 3) continue
+                    val raw = m.groups["mil"]!!.value
+                    raw.substring(0, 2).toInt() to raw.substring(2, 4).toInt()
+                }
+
                 else -> {
                     val hourRaw = m.groups["hour"]?.value?.toIntOrNull() ?: continue
                     val minuteRaw = m.groups["minute"]?.value?.toIntOrNull() ?: 0
                     val ampmRaw = m.groups["ampm"]?.value?.lowercase()?.replace(".", "")
                     val hasAmpm = !ampmRaw.isNullOrEmpty()
-                    val hasColon = m.groups["minute"] != null
+                    val hasMinute = m.groups["minute"] != null
 
-                    // Require am/pm or a colon. A bare number plus a zone token is
-                    // not evidence of a time — it is how people write font sizes
-                    // ("12 pt font"), carats ("1 ct diamond"), scores ("won 3-1 pt"),
-                    // abbreviations ("top 5 est. results") and street addresses
-                    // ("5 London Road"). Every one of those was being rewritten into
-                    // the middle of a real sentence. A zone alone is too weak a
-                    // signal; requiring a clock-shaped time costs us "5 ET", which
-                    // almost nobody writes, and buys back the entire class.
-                    if (!hasAmpm && !hasColon) continue
+                    // Require am/pm or a minute separator. A bare number plus a zone
+                    // token is not evidence of a time — it is how people write font
+                    // sizes ("12 pt font"), carats ("1 ct diamond"), scores ("won
+                    // 3-1 pt"), abbreviations ("top 5 est. results") and street
+                    // addresses ("5 London Road"). Every one of those was being
+                    // rewritten into the middle of a real sentence. A zone alone is
+                    // too weak a signal; requiring a clock-shaped time costs us
+                    // "5 ET", which almost nobody writes, and buys back the class.
+                    if (!hasAmpm && !hasMinute) continue
+
+                    // A dot only separates minutes when am/pm confirms it.
+                    //
+                    // "5.30pm" is how much of the world writes half past five, and
+                    // it silently did nothing here before. But a dot is also a
+                    // decimal point, so accepting it unconditionally would make
+                    // "3.50 pt" a time — the same false-positive class the rule
+                    // above exists to kill, re-entering through a different door.
+                    // With am/pm required, "5.30pm" converts and "3.50 pt" does not.
+                    if (m.groups["sep"]?.value == "." && !hasAmpm) continue
 
                     var h = hourRaw
                     if (hasAmpm) {

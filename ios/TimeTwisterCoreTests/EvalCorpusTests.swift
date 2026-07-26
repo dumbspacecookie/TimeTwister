@@ -70,9 +70,9 @@ final class EvalCorpusTests: XCTestCase {
         "ambiguous": 8,
         "boundary": 6,
         "idempotent": 8,
-        "known_gap": 1,
-        "must_detect": 106,
-        "must_not_detect": 86,
+        "known_gap": 4,
+        "must_detect": 112,
+        "must_not_detect": 97,
         "unicode": 20,
         "whitespace": 8,
     ]
