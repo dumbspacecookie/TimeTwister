@@ -27,7 +27,7 @@ and the iOS pipeline has never gone green.
 | | State |
 |---|---|
 | Shared Kotlin core | 263-row graded corpus, blocking gate 100%, overall 98.10% (four deliberate open gaps); 9 invariants over 500 seeded cases each; perf guarded |
-| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. One known divergence left — the ICU vs Java word boundary |
+| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. One known divergence left: `G109`, ICU folding U+212A KELVIN inside a case-insensitive ASCII class |
 | Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below) |
 | Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested |
 | iOS app | Core is verified; the app, keyboard and share extension still need a Mac |
@@ -150,10 +150,26 @@ is left.
       instant, with no marker and no refusal. `isUnrepresentable` structurally
       cannot fire — an ambiguous time round-trips perfectly. Needs an owner
       decision (D6).
-- [ ] **ICU `\b` ≠ Java `\b`.** Swift misses ~6 detections Kotlin makes where a
-      combining mark or ZWJ precedes the time, because ICU counts those as word
-      characters. The `isNumber`/`isDigit` half of this divergence is fixed; this
-      half is not.
+- [x] ~~**ICU `\b` ≠ Java `\b`.**~~ **Fixed 2026-07-26**, along with three other
+      regex-dialect divergences a re-measured differential (24,210 inputs) turned
+      up. The root cause in every case was the same: `\d`, `\b`, `$` and `(?i)` do
+      not mean the same thing to `java.util.regex` and to ICU.
+      - `\d` is `[0-9]` in Java and `\p{Nd}` in ICU. Worst finding of the day:
+        `3pm UTC+2<ARABIC-INDIC FIVE>` substituted the **device zone** while still
+        reporting `hadExplicitZone = true` — a seven-hour error — and
+        `5:<AI-5>0pm ET` sent 5:50pm as **5pm**. Both patterns now spell `[0-9]`.
+      - `\b` — `meet 5pm MSK<ZWJ>` converted on iOS with the time relabelled to the
+        device zone. Replaced with the explicit ASCII lookbehind/lookahead.
+      - VT/FF are line terminators to ICU, not Java, so `half past<VT>5pm ET`
+        converted 5:00 on Android. Both now recognise the phrase.
+      - `(?i)` — ICU folds U+212A KELVIN → `k` *inside* `[A-Za-z0-9]`. Both ASCII
+        guards are now `(?-i:)`. **The token half is not fixable cleanly** (the zone
+        alternation needs `(?i)`, and ICU has no ASCII-only case-insensitive mode):
+        `5pm <KELVIN>ST` still converts on iOS only. That is `G109`, and it is why
+        Kotlin reports 5 open items and Swift 6.
+
+      All 13 cases are corpus rows, so both cores are held to identical output on
+      every build rather than in a one-off report.
 - [ ] `5pm ET/PT` leaves `/PT` dangling — `tzPair` lists only DST-pair
       abbreviations, not the bare region tokens. Left unfixed on purpose: absorbing
       the second token would silently drop a zone the writer named, and declining
