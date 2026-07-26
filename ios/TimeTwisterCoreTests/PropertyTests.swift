@@ -183,6 +183,172 @@ final class PropertyTests: XCTestCase {
         finish("labels-reparse", violations, Set(TimeZoneAlias.map.values).count)
     }
 
+    /// The stamp must lead with the source zone, so the reader sees what the sender
+    /// actually said before any conversion of it.
+    func testStampAlwaysLeadsWithTheSourceLabel() {
+        runProperty("source-label-first") { input, targets in
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+                return nil
+            }
+            let stamp = TimeConverter.renderStamp(
+                for: detected, targets: targets, now: Self.now
+            )
+            let head = headOf(stamp)
+            // Labels are resolved against the instant being rendered, so the
+            // expectation has to be computed at that same instant rather than from
+            // the zone alone.
+            let label = TimeZoneAlias.shortLabel(
+                for: detected.timeZone,
+                at: TimeConverter.absoluteDate(for: detected, now: Self.now)
+            )
+            guard !head.hasSuffix(" " + label) else { return nil }
+            return "stamp must lead with the source zone: head \(show(head)) does not end with "
+                + "the source label '\(label)'. stamp=\(show(stamp))"
+        }
+    }
+
+    /// No zone may appear twice in a stamp, and the source may not reappear as one
+    /// of its own conversions.
+    func testStampTargetsAreDistinctAndNeverRepeatTheSource() {
+        runProperty("distinct-targets") { input, targets in
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+                return nil
+            }
+            let stamp = TimeConverter.renderStamp(
+                for: detected, targets: targets, now: Self.now
+            )
+            guard stamp.hasSuffix(")") else { return nil }  // no conversions rendered
+            let sourceLabel = TimeZoneAlias.shortLabel(
+                for: detected.timeZone,
+                at: TimeConverter.absoluteDate(for: detected, now: Self.now)
+            )
+            let labels = renderedTargetLabels(stamp)
+            if Set(labels).count != labels.count {
+                return "duplicate target zone in stamp \(show(stamp))"
+            }
+            if labels.contains(sourceLabel) {
+                return "source zone '\(sourceLabel)' rendered again as a target in \(show(stamp))"
+            }
+            return nil
+        }
+    }
+
+    /// The head of a rendered stamp must re-parse to the time it was rendered from.
+    func testRenderedStampRoundTripsToTheSameInstant() {
+        runProperty("round-trip") { input, targets in
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+                return nil
+            }
+            let at = TimeConverter.absoluteDate(for: detected, now: Self.now)
+            let label = TimeZoneAlias.shortLabel(for: detected.timeZone, at: at)
+            // Labels our own parser cannot read back are the subject of
+            // labels-reparse; do not double-report them here. Compared by offset,
+            // because an offset label resolves to a fixed-offset zone whose
+            // identifier is deliberately not the IANA one.
+            guard let back = TimeZoneAlias.resolve(label),
+                  back.secondsFromGMT(for: at) == detected.timeZone.secondsFromGMT(for: at)
+            else { return nil }
+
+            let head = headOf(
+                TimeConverter.renderStamp(for: detected, targets: targets, now: Self.now)
+            )
+            guard let reparsed = TimeParser.detectLast(in: head, defaultZone: Self.zone) else {
+                return "rendered stamp head \(show(head)) does not re-parse at all"
+            }
+            let sameZone = reparsed.timeZone.secondsFromGMT(for: at)
+                == detected.timeZone.secondsFromGMT(for: at)
+            if reparsed.hour != detected.hour || reparsed.minute != detected.minute || !sameZone {
+                return "round-trip drifted: \(detected.hour):\(detected.minute) "
+                    + "\(detected.timeZone.identifier) rendered as \(show(head)) and read back "
+                    + "as \(reparsed.hour):\(reparsed.minute) \(reparsed.timeZone.identifier)"
+            }
+            return nil
+        }
+    }
+
+    /// Padding the input must not change what was found inside it.
+    ///
+    /// Worth having on this core specifically: ICU and `java.util.regex` disagree
+    /// about what `\b` considers a word character (ICU counts combining marks and
+    /// ZWJ), so the two cores can drift here even though the pattern text is
+    /// identical.
+    func testDetectIsStableUnderSurroundingWhitespace() {
+        runProperty("whitespace-stable") { input, _ in
+            let bare = TimeParser.detect(in: input, defaultZone: Self.zone)
+            let padded = TimeParser.detect(in: "  " + input + "  ", defaultZone: Self.zone)
+            if bare.count != padded.count {
+                return "padding changed the number of detections: \(bare.count) -> \(padded.count)"
+            }
+            for (i, (a, b)) in zip(bare, padded).enumerated()
+            where a.hour != b.hour || a.minute != b.minute
+                || a.timeZone.identifier != b.timeZone.identifier {
+                return "padding changed detection #\(i): \(a.hour):\(a.minute) "
+                    + "\(a.timeZone.identifier) -> \(b.hour):\(b.minute) \(b.timeZone.identifier)"
+            }
+            return nil
+        }
+    }
+
+    /// Nothing detected means nothing changed.
+    ///
+    /// Kotlin asserts reference identity (`out !== input`) because a JVM String is a
+    /// reference and returning a fresh equal one would still be a wasted copy.
+    /// Swift strings are values, so identity is not a question that can be asked —
+    /// what is asserted here is the part that actually matters to a caller.
+    func testSpliceReturnsTheInputUnchangedWhenNothingIsDetected() {
+        runProperty("no-detect-identity") { input, targets in
+            guard TimeParser.detect(in: input, defaultZone: Self.zone).isEmpty else { return nil }
+            let out = TimeConverter.splice(
+                input: input, targets: targets, now: Self.now, defaultZone: Self.zone
+            )
+            guard out != input else { return nil }
+            return "detect() was empty so splice() must hand back the input unchanged, "
+                + "but it returned \(show(out))"
+        }
+    }
+
+    /// No input may throw. Swift cannot trap a fatal error from a test, so this
+    /// catches what it can and relies on the run surviving for the rest — which is
+    /// still worth having, because `try!` on the regexes and the UTF-16 arithmetic
+    /// in splice are both places a bad input could take the process down.
+    func testSpliceNeverThrows() {
+        runProperty("never-throws") { input, targets in
+            _ = TimeParser.detect(in: input, defaultZone: Self.zone)
+            _ = TimeConverter.splice(
+                input: input, targets: targets, now: Self.now, defaultZone: Self.zone
+            )
+            _ = TimeConverter.maybeSplice(
+                input: input, targets: targets, readOnly: false, now: Self.now,
+                defaultZone: Self.zone
+            )
+            return nil
+        }
+    }
+
+    // MARK: - stamp helpers
+
+    /// The "5pm CT" part of "5pm CT (6pm ET · 3pm PT)".
+    private func headOf(_ stamp: String) -> String {
+        guard let r = stamp.range(of: " (") else { return stamp }
+        return String(stamp[stamp.startIndex..<r.lowerBound])
+    }
+
+    /// ["ET", "PT", "UK"] out of "5pm CT (6pm ET · 3pm PT · 11pm UK)".
+    ///
+    /// A conversion landing on another calendar day carries a trailing day marker
+    /// ("1am CT +1d"), which is not part of the zone label and has to come off
+    /// first — otherwise every cross-midnight target reads as a zone called "+1d".
+    private func renderedTargetLabels(_ stamp: String) -> [String] {
+        guard let open = stamp.range(of: " ("), stamp.hasSuffix(")") else { return [] }
+        let inner = stamp[open.upperBound..<stamp.index(before: stamp.endIndex)]
+        return inner.components(separatedBy: " · ").compactMap { part in
+            part.split(separator: " ")
+                .map(String.init)
+                .filter { $0.range(of: #"^[+-]\d+d$"#, options: .regularExpression) == nil }
+                .last
+        }
+    }
+
     // MARK: - driver
 
     private func runProperty(
