@@ -12,11 +12,15 @@ This repo is a monorepo with three builds, all sharing one Kotlin/Swift parser c
 
 The core logic (parser, alias table, stamp renderer) is duplicated in Swift and Kotlin, and the two test suites are meant to mirror each other so divergence gets caught early. Kotlin tests are JVM-only, so no emulator is needed.
 
-They do not mirror each other today, and the two cores do **not** produce identical output for every input:
+As of 2026-07-25 the two cores are scored against **the same graded corpus** — `android/core/src/test/resources/eval/corpus.tsv`, 214 rows, read directly by both suites rather than copied — and both hit 100% precision, 100% recall and 100% exact-match on it. The Swift core also carries the same red-team regression suite, one test per defect, with the same expected strings.
 
-- The Kotlin suite is the larger of the two and covers cases the Swift one doesn't. Treat "mirrored suites" as the goal, not the current state.
-- Both sides hard-code a short label (`ET`, `CT`, `PT`, …) for a common set of zones and agree there. For zones *outside* that set the two fall back differently — one may render the raw IANA id, the other a platform abbreviation or a bare `GMT+1`-style offset — so a stamp for, say, `Europe/Berlin` does not match across platforms. Converging the fallback is in progress on the Kotlin side; bringing Swift in line is a later pass.
-- The Kotlin core also carries splice entry points the Swift core has no equivalent for, because the iOS Action Extension takes a different path.
+Remaining known differences:
+
+- The Kotlin suite is still the larger of the two: it has property-based tests over seeded cases that Swift has no equivalent for yet.
+- Zone labels no longer diverge. Both cores now carry their own standard/daylight abbreviation pairs and their own `UTC±h:mm` fallback instead of asking the platform, so `Europe/Berlin` renders identically on Android, iOS, Windows and Linux. Neither core can emit a raw IANA id.
+- Swift's `detect`/`splice` take an optional `defaultZone`; Kotlin reads `ZoneId.systemDefault()`. The seam exists because `NSTimeZone.default` is ignored by swift-corelibs, so tests off a Mac need it to be deterministic. Production callers on both sides use the device zone.
+
+The Swift core builds and tests **without a Mac** — `swift test` from `ios/` (see [ios/README.md](ios/README.md)). Kotlin tests are JVM-only, so no emulator is needed either.
 
 ## Demo
 
@@ -35,14 +39,19 @@ What you type, and what gets sent:
 
 Targets above are CT/ET/PT — these are the user-configurable set in the settings screen. Half-hour offset zones (India, Nepal, parts of Australia) are handled correctly because the converter uses IANA zone IDs, not fixed offsets, so DST transitions also do the right thing.
 
-You can reproduce this locally without sideloading — with one caveat. `StampDemo` carries a class-level `@Ignore` so it stays out of normal test runs, which means the obvious command runs nothing and still exits green:
+You can reproduce this locally without sideloading. The table above is printed by `StampDemo`, which runs the real parse + render pipeline:
 
 ```bash
 cd android
-./gradlew :core:test --tests "*StampDemo*" --info   # reports "1 skipped", prints no table
+./gradlew :core:test --tests "*StampDemo*" -Dtimetwister.demo=1
 ```
 
-To actually see the output, remove the `@Ignore` on `core/src/test/kotlin/com/timetwister/core/StampDemo.kt` first. (Making the demo opt-in via a system property instead of `@Ignore` would fix this properly; it hasn't been done yet.)
+```powershell
+# PowerShell splits an unquoted -D...=... at the '=', so quote the whole flag
+.\android\gradlew.bat -p desktop :core:test --tests "*StampDemo*" "-Dtimetwister.demo=1"
+```
+
+Without the flag the demo is skipped, so it stays out of ordinary test runs. It used to be gated by a class-level `@Ignore` instead — which meant the command this README gave reported "1 skipped", printed nothing, and exited green.
 
 ## Why both?
 

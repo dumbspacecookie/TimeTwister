@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Cloud-backup allowlist for API 23-30. Superseded by data_extraction_rules.xml
+    on API 31+; both are declared because minSdk is 26.
+
+    Listing anything at all makes this an allowlist: with an <include> present,
+    everything not named here is excluded. That is the point. `allowBackup="true"`
+    with no rules file means "back up whatever happens to be in the app's data
+    directory, now and in every future version" — a default nobody chose, that
+    silently widens as the app grows.
+
+    What is named is exactly the user's own configuration:
+      - datastore/timetwister.preferences_pb   the chosen target zones
+      - timetwister_local.xml                  the same list mirrored for a fast
+                                               cold read, plus the first-run flag
+
+    Both are worth restoring onto a new device — re-picking your zones is the
+    only setup this app has. Neither contains anything derived from message
+    content or from contacts: the contacts permission is read at the moment the
+    "suggest zones" button is pressed and nothing from it is persisted beyond the
+    resulting zone list, which is the user's own choice by then.
+-->
+<full-backup-content>
+    <include domain="file" path="datastore/timetwister.preferences_pb" />
+    <include domain="sharedpref" path="timetwister_local.xml" />
+</full-backup-content>

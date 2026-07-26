@@ -1,6 +1,6 @@
 package com.timetwister.core
 
-import org.junit.Ignore
+import org.junit.Assume
 import org.junit.Test
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -11,12 +11,19 @@ import java.time.ZonedDateTime
  * executable documentation: anyone can see exactly what TimeTwister produces
  * without sideloading the APK.
  *
- * @Ignore'd so it doesn't pollute regular `gradle :core:test` runs.
- * Run on demand with:
- *   gradle :core:test --tests "*StampDemo*" -Dtest.ignoreFailures=true --info
- *   (or temporarily remove @Ignore)
+ * Gated on a system property so it stays out of normal `:core:test` runs:
+ *
+ *   ./gradlew :core:test --tests "*StampDemo*" -Dtimetwister.demo=1
+ *
+ * It used to carry a class-level `@Ignore` instead, which meant the command the
+ * README told people to run reported "1 skipped", printed nothing, and exited
+ * green — documentation that silently documented nothing. A property can be
+ * turned on from the command line; an annotation cannot.
+ *
+ * The build wires the property through to the test JVM and turns on stdout
+ * forwarding when it is set (see core/build.gradle.kts) — Gradle does neither
+ * by default, which is the other half of why the old command appeared to work.
  */
-@Ignore("on-demand demo, run explicitly")
 class StampDemo {
 
     private val anchor: ZonedDateTime =
@@ -29,6 +36,11 @@ class StampDemo {
     )
 
     @Test fun demoStampOutputs() {
+        Assume.assumeTrue(
+            "on-demand demo — re-run with -Dtimetwister.demo=1 to print the table",
+            System.getProperty(DEMO_PROPERTY) != null,
+        )
+
         val phrases = listOf(
             "lets do 5pm CT",
             "how about 5:30pm pacific",
@@ -64,5 +76,10 @@ class StampDemo {
                 println()
             }
         }
+    }
+
+    companion object {
+        /** Also referenced by core/build.gradle.kts — keep the two in step. */
+        const val DEMO_PROPERTY = "timetwister.demo"
     }
 }

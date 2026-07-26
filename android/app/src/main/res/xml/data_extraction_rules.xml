@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    API 31+ replacement for backup_rules.xml. See that file for why this is an
+    allowlist rather than a default.
+
+    The two transfer paths are declared separately and deliberately given the
+    same contents:
+      - cloud-backup    goes to the user's Google account
+      - device-transfer stays on the wire between two devices the user holds
+
+    A zone list is not sensitive in either direction, so there is nothing here
+    that should travel one way and not the other. Keeping both blocks explicit
+    means that if something sensitive is ever added, the decision has to be made
+    twice rather than inherited once.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="datastore/timetwister.preferences_pb" />
+        <include domain="sharedpref" path="timetwister_local.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="datastore/timetwister.preferences_pb" />
+        <include domain="sharedpref" path="timetwister_local.xml" />
+    </device-transfer>
+</data-extraction-rules>

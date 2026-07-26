@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The <monochrome> layer is what Android 13+ themed icons use: the launcher
+    discards the background, takes this layer's alpha as a silhouette, and tints
+    it with the user's wallpaper palette. Without it the launcher has nothing to
+    theme and falls back to drawing the full-colour icon, so on a themed home
+    screen this app was the one tile ignoring the theme.
+
+    It points at the same vector as the foreground on purpose. The artwork is
+    already a flat white shape on a solid field, which is exactly what a
+    monochrome layer wants — the tint replaces the fill colour, so a separate
+    asset would just be the same paths in a second file, free to drift.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>

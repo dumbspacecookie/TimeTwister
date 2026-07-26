@@ -16,6 +16,7 @@ Two iOS entry points share the same `TimeTwisterCore` parser:
 ```
 ios/
 ├── README.md
+├── Package.swift                   # SwiftPM view of the same sources — see "Testing the core"
 ├── project.yml                     # XcodeGen spec — generates .xcodeproj + Info.plists
 ├── TimeTwister/                    # Container app (settings UI)
 │   ├── App.swift
@@ -31,10 +32,46 @@ ios/
 │   ├── TimeConverter.swift         # formatting + multi-TZ rendering
 │   └── UserPreferences.swift       # shared via App Group
 └── TimeTwisterCoreTests/
-    └── TimeConverterTests.swift
+    ├── TimeConverterTests.swift
+    ├── SpliceTests.swift
+    ├── CountryZoneTests.swift
+    ├── TimeZoneAliasTests.swift       # the label contract
+    ├── RedTeamRegressionTests.swift   # one test per defect, mirrors the Kotlin suite
+    └── EvalCorpusTests.swift          # scores the shared 214-row corpus
 ```
 
 `Info.plist` files are generated from `project.yml` on `xcodegen generate` — they're not committed to the repo.
+
+## Testing the core (no Mac required)
+
+`Package.swift` is a SwiftPM view of the same directories XcodeGen builds from — the `path:` arguments point at the existing folders, so there is one copy of every file and the two build systems cannot drift. The app, keyboard and share extension still need Xcode; the logic they all depend on does not.
+
+```bash
+swift test           # from this directory
+```
+
+On macOS or Linux that is the whole command. On Windows the toolchain needs the MSVC environment and the Windows SDK first:
+
+```powershell
+# Load the MSVC environment (Swift on Windows links against it)
+$vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+cmd /c "`"$vcvars`" >nul 2>&1 && set" | ForEach-Object {
+    if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+}
+
+$base = "$env:LOCALAPPDATA\Programs\Swift"
+$env:PATH = "$base\Toolchains\6.3.3+Asserts\usr\bin;$base\Runtimes\6.3.3\usr\bin;$env:PATH"
+$env:SDKROOT = "$base\Platforms\6.3.3\Windows.platform\Developer\SDKs\Windows.sdk"
+
+swift test
+```
+
+Two things worth knowing before you touch this core off a Mac:
+
+- **`DateFormatter.string(from:)` traps** (illegal instruction, `0xC000001D`) in swift-corelibs-Foundation on Windows, locale or no locale. Nothing here calls it — `TimeConverter.formatted` renders a 12-hour clock from calendar components by hand — and it should stay that way, or the suite dies rather than fails. This is a corelibs limitation, not an iOS bug.
+- **`NSTimeZone.default = …` is silently ignored** by swift-corelibs. Pinning the process zone the way the Kotlin suite does looks like it works and does not. Tests pass `defaultZone:` explicitly instead.
+
+`EvalCorpusTests` reads `android/core/src/test/resources/eval/corpus.tsv` relative to its own source file, so the Swift and Kotlin cores are graded by the same rows. Run from a source checkout; from a bundle elsewhere it skips with a reason rather than failing.
 
 ## Setup on macOS
 

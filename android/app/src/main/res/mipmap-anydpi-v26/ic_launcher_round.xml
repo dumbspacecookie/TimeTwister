@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The target of android:roundIcon.
+
+    Identical to ic_launcher.xml, and that is correct rather than lazy: an
+    adaptive icon is already just a foreground over a background, and the
+    *launcher* decides the mask — circle, squircle, rounded square, teardrop. The
+    round variant exists because some OEM launchers ask for `roundIcon` by name
+    and, when the manifest does not declare one, fall back to the legacy square
+    bitmap path instead of the adaptive icon.
+
+    Declaring it costs one file and removes that fallback. If the artwork ever
+    stops being mask-agnostic, this is the file that diverges.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
