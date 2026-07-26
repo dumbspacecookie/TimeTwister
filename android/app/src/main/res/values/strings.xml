@@ -11,7 +11,19 @@
     <string name="process_text_label">TimeTwister</string>
 
     <!-- ProcessTextActivity: the only feedback the user ever gets from the main flow. -->
-    <string name="toast_no_time_found">No time found — try \"5pm CT\" or \"17:00 ET\"</string>
+    <!--
+        Covers two situations the parser cannot currently tell apart, because both come
+        back as a null detection: there was no time in the selection, and there was one we
+        deliberately refused (a relative phrase, an unsupported zone, a zone separated from
+        the time by markup, a bare hour with no am/pm).
+
+        It used to read "No time found", which is a false statement in the second case, and
+        it suggested trying "5pm CT" — advice that reads as an insult to someone who wrote
+        *5pm* CT and had the markup defeat the match. Phrased around what the tool will and
+        will not do, so it is true either way. A message that distinguishes the two needs a
+        decline reason out of TimeParser in both cores; see PLAN.md.
+    -->
+    <string name="toast_nothing_converted">Nothing converted — TimeTwister leaves your text alone unless it\'s certain. It needs an unambiguous time with a supported zone, like \"5pm CT\" or \"17:00 ET\".</string>
     <string name="toast_readonly_copied">%1$s — copied (this text is read-only)</string>
     <string name="toast_selection_too_long">Selection too long — select just the line with the time</string>
     <!--
@@ -76,6 +88,7 @@
     <string name="action_done">Done</string>
     <string name="action_ok">OK</string>
     <string name="action_cancel">Cancel</string>
+    <string name="action_continue">Continue</string>
     <string name="action_not_now">Not now</string>
     <string name="action_open_settings">Open settings</string>
     <plurals name="contact_count">
@@ -84,6 +97,14 @@
     </plurals>
 
     <!-- Permission handling -->
+    <!--
+        Prominent disclosure, shown before the system permission dialog rather than after a
+        denial. Says what is read, what it is used for, what leaves the device (nothing),
+        and that declining costs the user nothing — in that order, because that is the order
+        the questions occur to someone who has just been asked for their contacts.
+    -->
+    <string name="disclosure_title">About to read your contacts</string>
+    <string name="disclosure_body">To suggest timezones, TimeTwister reads the phone numbers in your contacts and looks at their country codes only — for example +44 suggests London. It does this on your device. Nothing is uploaded, no names or numbers are stored, and the app has no Internet permission at all. Only the zones you choose to add are saved. You can skip this and add zones by hand; the app works exactly the same.</string>
     <string name="permission_title">Contacts access needed</string>
     <string name="permission_rationale">TimeTwister reads only the country code of each phone number to guess which zones your people are in. It never uploads anything. Without it, add zones by hand — the app works exactly the same.</string>
     <string name="permission_blocked">Android won\'t ask again because contacts access was denied twice. You can turn it on in system settings, or just add zones by hand — the app works exactly the same.</string>

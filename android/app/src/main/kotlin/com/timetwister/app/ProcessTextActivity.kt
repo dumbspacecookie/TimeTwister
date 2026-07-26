@@ -2,10 +2,12 @@ package com.timetwister.app
 
 import android.app.Activity
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.PersistableBundle
 import android.widget.Toast
 import kotlinx.coroutines.runBlocking
 import java.time.ZoneId
@@ -50,10 +52,12 @@ class ProcessTextActivity : Activity() {
             ProcessTextDecision.TooLong ->
                 toast(getString(R.string.toast_selection_too_long), Toast.LENGTH_SHORT)
 
-            // Specific, not generic: the failure is almost always "the parser needs a
-            // disambiguator", so show what a parseable selection looks like.
+            // Shows what a convertible selection looks like. NOTE this branch is also the
+            // deliberate-decline path — the parser reports "no detection" both when there
+            // was no time and when it refused one — which is why the string no longer
+            // claims no time was found. See the comment on toast_nothing_converted.
             ProcessTextDecision.NoTimeFound ->
-                toast(getString(R.string.toast_no_time_found), Toast.LENGTH_LONG)
+                toast(getString(R.string.toast_nothing_converted), Toast.LENGTH_LONG)
 
             is ProcessTextDecision.TimeDoesNotExist ->
                 toast(
@@ -100,7 +104,18 @@ class ProcessTextActivity : Activity() {
         // Best-effort: a missing/failing clipboard service must not take down the Toast path.
         runCatching {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            cm?.setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), text))
+            val clip = ClipData.newPlainText(getString(R.string.app_name), text)
+            // Android 13+ shows a preview toast of whatever is copied. What lands here is
+            // somebody else's message — the read-only path exists precisely for text the
+            // user does not own — so the content should not be echoed on screen a second
+            // time. EXTRA_IS_SENSITIVE suppresses the preview without affecting the paste.
+            //
+            // No API guard needed: EXTRA_IS_SENSITIVE is a compile-time String constant, so
+            // it inlines, and an unrecognised extra is simply ignored below API 33.
+            clip.description.extras = PersistableBundle().apply {
+                putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
+            cm?.setPrimaryClip(clip)
         }
     }
 

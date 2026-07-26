@@ -194,8 +194,26 @@ fun TimeZonePickerDialog(
         COMMON_ZONE_IDS.mapNotNull { id -> index.firstOrNull { it.id == id } }
     }
     val filteredCommon = remember(query, common) { common.search(query) }
-    val filteredAll = remember(query, index) { index.search(query) }
 
+    // "All" excludes whatever "Common" is already showing. Without this every result
+    // appeared TWICE — once per section — which for a search like "new york" meant two
+    // identical-looking rows and a real "did I mis-tap?" moment. Deduping here rather than
+    // dropping the sections keeps the curated shortlist doing its job while browsing.
+    val filteredAll = remember(query, index, filteredCommon) {
+        val shown = filteredCommon.mapTo(HashSet()) { it.id }
+        index.search(query).filter { it.id !in shown }
+    }
+    val nothingMatched = filteredCommon.isEmpty() && filteredAll.isEmpty()
+
+    // NOT fixed here: with the keyboard up in landscape this dialog still extends under the
+    // IME, so the result list and Cancel can be unreachable. Two attempts are recorded in
+    // PLAN.md because both made it worse and were reverted -- imePadding() is silently a
+    // no-op inside a Compose Dialog here (WindowInsets.ime stays zero; neither
+    // decorFitsSystemWindows = false nor SOFT_INPUT_ADJUST_RESIZE on the dialog's own window
+    // changed that), and shrinking the dialog instead left the list at zero height and
+    // clipped Cancel off the edge entirely. Measured: rows laid out at y=380..851 against a
+    // keyboard starting at ~390, present in the accessibility tree and inert when tapped.
+    // The real fix is to stop being a Dialog -- a full screen/route owns its insets.
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -230,9 +248,19 @@ fun TimeZonePickerDialog(
                     if (filteredCommon.isNotEmpty()) {
                         item { SectionHeader(stringResource(R.string.picker_section_common)) }
                         items(filteredCommon, key = { "common:${it.id}" }) { ZoneRow(it, onPick) }
-                        item { SectionHeader(stringResource(R.string.picker_section_all)) }
                     }
-                    if (filteredAll.isEmpty()) {
+                    // Header only when there is something under it. It used to print
+                    // unconditionally alongside Common, so a search matching only a common
+                    // zone showed an "All" heading with nothing beneath it.
+                    if (filteredAll.isNotEmpty()) {
+                        if (filteredCommon.isNotEmpty()) {
+                            item { SectionHeader(stringResource(R.string.picker_section_all)) }
+                        }
+                        items(filteredAll, key = { "all:${it.id}" }) { ZoneRow(it, onPick) }
+                    }
+                    // Keyed off BOTH lists: this was `filteredAll.isEmpty()`, which claimed
+                    // "no matches" while matching common rows sat directly above it.
+                    if (nothingMatched) {
                         item {
                             Text(
                                 text = stringResource(R.string.picker_no_matches, query),
@@ -242,11 +270,12 @@ fun TimeZonePickerDialog(
                             )
                         }
                     }
-                    items(filteredAll, key = { "all:${it.id}" }) { ZoneRow(it, onPick) }
                 }
 
                 // Scrim-tap was previously the only way out, which is undiscoverable and
-                // impossible to reach with a switch/keyboard.
+                // impossible to reach with a switch/keyboard. Only in the tall layout — the
+                // short one has already put Cancel next to the search field, and a footer
+                // here is exactly what the keyboard was covering.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,

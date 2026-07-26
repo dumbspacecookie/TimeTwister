@@ -94,6 +94,13 @@ fun SettingsScreen() {
     var rationaleOpen by rememberSaveable { mutableStateOf(false) }
     var permanentlyDenied by rememberSaveable { mutableStateOf(false) }
 
+    // Shown BEFORE the system permission dialog, never after. Play's Prominent Disclosure
+    // requirement is specifically about the moment before the request: the user has to be
+    // told what personal data is accessed and why while they can still decline without
+    // spending their one-and-only "ask again" chance. The existing `rationaleOpen` dialog
+    // only ever appeared *after* a denial, so nothing explained contacts access up front.
+    var disclosureOpen by rememberSaveable { mutableStateOf(false) }
+
     // Suggestions themselves aren't Saveable (ZoneId isn't parcelable), so they stay in
     // remember — a rotation just re-runs the scan, which is cheap and permission-gated.
     var suggestions by remember { mutableStateOf<List<ContactZoneInferencer.Suggestion>>(emptyList()) }
@@ -215,8 +222,9 @@ fun SettingsScreen() {
             }
 
             OutlinedButton(onClick = {
-                if (inferencer.hasPermission()) loadSuggestions()
-                else contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                // Already granted → straight to work; otherwise disclose first and let the
+                // disclosure dialog be the thing that launches the system prompt.
+                if (inferencer.hasPermission()) loadSuggestions() else disclosureOpen = true
             }) {
                 Icon(Icons.Default.People, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
@@ -301,6 +309,27 @@ fun SettingsScreen() {
             confirmButton = {
                 TextButton(onClick = { suggestionsEmpty = false }) {
                     Text(stringResource(R.string.action_ok))
+                }
+            },
+        )
+    }
+
+    if (disclosureOpen) {
+        AlertDialog(
+            onDismissRequest = { disclosureOpen = false },
+            title = { Text(stringResource(R.string.disclosure_title)) },
+            text = { Text(stringResource(R.string.disclosure_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    disclosureOpen = false
+                    contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                }) { Text(stringResource(R.string.action_continue)) }
+            },
+            dismissButton = {
+                // A real way out that costs nothing. Dismissing here never reaches the
+                // system dialog, so it does not burn the user's single re-ask.
+                TextButton(onClick = { disclosureOpen = false }) {
+                    Text(stringResource(R.string.action_not_now))
                 }
             },
         )

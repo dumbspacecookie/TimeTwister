@@ -4,8 +4,28 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Adaptive-icon safe zone is the inner 72x72 area (centered). -->
-    <group android:translateX="18" android:translateY="18">
+    <!--
+        Adaptive-icon geometry: the canvas is 108x108, of which only the inner 72x72 is
+        guaranteed visible; the outer 18 on each side is bleed for masks and parallax.
+
+        The artwork below is drawn as a 72-wide clock in its own 0..72 space, so translating
+        by 18 alone put the ring EXACTLY on the safe-zone boundary — zero margin. Under
+        Pixel's circular mask that reads as a bordered tile rather than a clock, and under
+        any tighter mask the ring clips. Material's guidance is to keep key shapes inside a
+        66 keyline; scaling by 0.83 about the artwork's own centre lands the ring at ~60
+        diameter, leaving ~6 of margin inside the safe zone on every side.
+
+        Transform order for a vector <group> is scale, then rotate, then translate, with
+        pivot applying to the first two — so the pivot here is in the pre-translate 0..72
+        space and the finished centre still sits at (54,54).
+    -->
+    <group
+        android:translateX="18"
+        android:translateY="18"
+        android:pivotX="36"
+        android:pivotY="36"
+        android:scaleX="0.83"
+        android:scaleY="0.83">
         <!-- Clock face ring. -->
         <path
             android:fillColor="#FFFFFF"
