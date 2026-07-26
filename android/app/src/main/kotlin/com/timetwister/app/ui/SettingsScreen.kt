@@ -71,7 +71,14 @@ fun SettingsScreen() {
 
     // null = still loading. Distinguishing "not read yet" from "read, and it's empty"
     // matters now that an empty zone list is a legitimate, persisted state.
-    val loadedZones by prefs.targetZonesFlow().collectAsState(initial = null)
+    //
+    // The `remember` is load-bearing. collectAsState keys its collection on the flow
+    // object, so obtaining the flow inline restarted the DataStore subscription on every
+    // recomposition — and closing the picker after an add is a recomposition, which is how
+    // a successful write could fail to reach the screen. UserPreferences also caches the
+    // flow now; both ends are pinned because either one alone silently fixes the other.
+    val zonesFlow = remember(prefs) { prefs.targetZonesFlow() }
+    val loadedZones by zonesFlow.collectAsState(initial = null)
     val zones = loadedZones.orEmpty()
 
     // Keep the synchronous mirror ProcessTextActivity reads in step with DataStore, even
@@ -161,7 +168,7 @@ fun SettingsScreen() {
                     supportingContent = { Text(tz.id) },
                     trailingContent = {
                         IconButton(onClick = {
-                            scope.launch { prefs.setTargetZones(zones - tz) }
+                            scope.launch { prefs.removeTargetZone(tz) }
                         }) {
                             Icon(
                                 Icons.Default.Close,
@@ -228,9 +235,10 @@ fun SettingsScreen() {
         TimeZonePickerDialog(
             onDismiss = { pickerOpen = false },
             onPick = { z ->
-                if (zones.none { it.id == z.id }) {
-                    scope.launch { prefs.setTargetZones(zones + z) }
-                }
+                // No pre-check against `zones` any more: addTargetZone dedupes inside the
+                // DataStore transaction, which is also correct when this lambda is holding
+                // a list from a composition that has already been superseded.
+                scope.launch { prefs.addTargetZone(z) }
                 pickerOpen = false
             },
         )
@@ -269,7 +277,7 @@ fun SettingsScreen() {
                                     )
                                 } else {
                                     TextButton(onClick = {
-                                        scope.launch { prefs.setTargetZones(zones + s.zone) }
+                                        scope.launch { prefs.addTargetZone(s.zone) }
                                     }) { Text(stringResource(R.string.action_add)) }
                                 }
                             },
