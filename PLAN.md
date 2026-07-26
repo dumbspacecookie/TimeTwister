@@ -1,6 +1,16 @@
 # TimeTwister — what's left
 
-Status as of **2026-07-25**, after the Swift port wave.
+Status as of **2026-07-25**, after the Swift port wave and the review pass that
+followed it.
+
+> **Read this first.** A six-agent review of the port found five ways the tool
+> corrupted a real user's message, and the eval scored 100% throughout. The
+> corpus contained no URL, no path, no code, and not one open defect — so the
+> number was measuring the set it had been written against. All five are fixed
+> and have corpus rows; the lesson is kept here because the same trap is easy to
+> walk back into: **a green eval is a statement about corpus composition first
+> and parser quality second.** The corpus now carries a `known_gap` row again, so
+> the report's OPEN ITEMS section prints on every run instead of never.
 
 The build works on a clean Windows box, both cores are hardened and scored
 against the same corpus, and the README no longer claims things that aren't
@@ -16,8 +26,8 @@ and the iOS pipeline has never gone green.
 
 | | State |
 |---|---|
-| Shared Kotlin core | Hardened. 100% precision/recall/exact on the 214-row graded corpus; 9 invariants enforced over 500 seeded cases each |
-| Shared Swift core | **Now at parity.** Same corpus, same 100%; same red-team suite. Builds and tests without a Mac |
+| Shared Kotlin core | 236-row graded corpus, blocking gate 100%, overall 99.15% (one deliberate open gap); 9 invariants over 500 seeded cases each |
+| Shared Swift core | Same corpus, same gate, same red-team suite, 3 of the 9 invariants. Builds and tests without a Mac. **Not fully at parity** — see below |
 | Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below) |
 | Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested |
 | iOS app | Core is verified; the app, keyboard and share extension still need a Mac |
@@ -118,7 +128,89 @@ Three defects surfaced on the way and are worth remembering:
       converter". That is an art decision, not a mechanical one — say what you
       want and I'll draw it.
 
-### 5. Parser gaps that still mislead — **next**
+### 4b. Open items from the review pass — **next**
+
+Everything a six-agent review turned up that is *not* yet fixed, worst first.
+The message-corruption findings from that review are all closed; these are what
+is left.
+
+**Correctness / robustness**
+
+- [ ] **The parser is O(n²) and only Android caps its input.** Two full-string
+      copies run once per match (`TimeParser` unknown-zone lookahead and
+      `stampRanges`). Measured: 200 KB of stamped text takes 34 s. Android caps
+      at 5000 chars before parsing and is safe; the **iOS Action Extension, the
+      iOS keyboard (main thread, every keystroke) and the desktop tray are all
+      uncapped**. An extension that blocks for tens of seconds is watchdog-killed.
+      Two independent fixes: port `MAX_INPUT_CHARS`, and pass explicit ranges to
+      the regex instead of materialising substrings (makes both paths linear).
+- [ ] **Autumn fall-back is unhandled on both cores.** An ambiguous wall clock
+      (1:30am ET on 2026-11-01 happens twice) silently resolves to the earlier
+      instant, with no marker and no refusal. `isUnrepresentable` structurally
+      cannot fire — an ambiguous time round-trips perfectly. Needs an owner
+      decision (D6).
+- [ ] **ICU `\b` ≠ Java `\b`.** Swift misses ~6 detections Kotlin makes where a
+      combining mark or ZWJ precedes the time, because ICU counts those as word
+      characters. The `isNumber`/`isDigit` half of this divergence is fixed; this
+      half is not.
+- [ ] `5pm ET/PT` leaves `/PT` dangling — `tzPair` lists only DST-pair
+      abbreviations, not the bare region tokens.
+
+**Eval integrity** — the gate works (proved by mutation on both cores) but is
+defensible in only one direction:
+
+- [ ] `ratio(n, 0)` returns 1.0, so **a corpus that loaded zero blocking rows
+      passes**. In Swift both eval tests share the `XCTSkip` path, so one missing
+      file disarms the guard and the gate together.
+- [ ] The ratchet is bypassable without touching the constant: recategorise a row
+      to `ambiguous`, delete it (94 of 236 can go — the only floor is `>= 120`),
+      or edit `expect_output` to match new behaviour. A pinned row count, pinned
+      per-category counts, and `assert blocking.falsePositives == 0` would each
+      close a route.
+- [ ] Three of the four defects in §5 still have **no corpus row**, and
+      `half past 5 ET` is encoded as `must_not_detect`, blocking, passing — a
+      defect this file calls open is ratchet-protected as correct (D7).
+- [ ] Harness config (`blockingCategories`, the ratchet, the clock, the targets)
+      is duplicated per core with nothing asserting the copies agree.
+- [ ] Swift is missing 6 of the 9 invariants: `source-label-first`,
+      `distinct-targets`, `round-trip`, `whitespace-stable`,
+      `no-detect-identity`, `never-throws`.
+- [ ] `android/app` has **no `src/test` and no `androidTest`** — CI's
+      `:app:testDebugUnitTest` passes vacuously. CI never runs `swift test`
+      either. Cheapest first test: `UserPreferences.decode/encode`, where
+      `defaults.size <= MAX_RECOMMENDED_ZONES` **fails today** outside the US.
+
+**Security / privacy** (nothing critical; full details in the review)
+
+- [ ] Read-only path writes the whole converted message to the clipboard without
+      `ClipDescription.EXTRA_IS_SENSITIVE`, so Android 13+ shows a content
+      preview.
+- [ ] README Privacy says "no network calls" and does not mention that settings
+      now leave the device via Android Auto Backup. True as written; incomplete.
+- [ ] `android-release.yml` interpolates a tag name unquoted into a `run:` block
+      that holds the signing keystore. `ios-release.yml` already does this
+      correctly — copy that.
+
+**UX**, from a real emulator session (everything changed in the icon/backup work
+verified PASS; these are pre-existing)
+
+- [ ] 🔴 **Intermittent stale settings UI.** Once in four, adding a zone
+      persisted to both stores but the screen did not update — reads to the user
+      as "Add timezone silently does nothing". Confirmed against the
+      accessibility tree, not pixels. Likely `targetZonesFlow()` allocating a new
+      Flow per recomposition and re-keying `collectAsState`; hoisting it into a
+      `remember` closes the window.
+- [ ] Launcher icon has **zero safe-zone margin** — the clock ring sits exactly
+      on the mask boundary, so it reads as a bordered tile and will clip under
+      any mask tighter than Pixel's circle.
+- [ ] Zone picker is unusable in landscape with the keyboard up: the IME covers
+      the result list *and* Cancel.
+- [ ] Every search result is listed twice (once under "Common", once under "All").
+- [ ] The false-positive decline reuses the no-detection string, so `use 12 pt
+      font` invites a retry instead of saying it declined.
+- [ ] No prominent disclosure before the contacts permission dialog (bears on D1).
+
+### 5. Parser gaps that still mislead
 
 Confirmed still-open behaviour, all verifiable locally on both cores now, all
 drop into the existing corpus + regression suites:
@@ -189,6 +281,19 @@ awaiting adjudication. `A001` gates the ranges work in item 5.
 | A006 | `5pm est/edt` | absorb the pair (current) or refuse? |
 | A007 | `17h00 CET` | European notation — in scope? |
 | A008 | `tomorrow 9am` | "tomorrow" is ignored by the roll-forward heuristic |
+
+### D6. Ambiguous wall-clock times (autumn fall-back)
+`1:30am ET` on 2026-11-01 names two different instants an hour apart. Both cores
+silently pick the earlier one, unmarked. Options: refuse to convert (matches this
+codebase's stated bar — "we would rather leave the text untouched"), or convert
+and mark it ambiguous (keeps it useful, costs stamp width). Asked on 2026-07-25;
+both were selected, which cannot both be the behaviour — still open.
+
+### D7. `half past 5 ET` — corpus says correct, roadmap says defect
+It is a **blocking** `must_not_detect` row that passes, so it counts toward the
+score and is protected against being fixed. §5 lists it as an open defect. One of
+the two has to give: either drop it from §5 and keep the no-op deliberately, or
+move the row to `known_gap` and implement it later. Asked 2026-07-25, unanswered.
 
 ### D4. Signing material
 Android keystore; six Apple secrets. Needed before anything reaches a person.

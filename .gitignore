@@ -18,6 +18,9 @@ Carthage/Build/
 
 # Android / Gradle
 .gradle/
+# Kotlin compiler daemon session locks. Untracked but not ignored is a trap:
+# one `git add -A` and they are in the tree.
+.kotlin/
 android/**/build/
 android/local.properties
 desktop/local.properties
