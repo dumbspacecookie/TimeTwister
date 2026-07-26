@@ -41,8 +41,39 @@ object TimeParser {
      * "3pm Central European Time" matches `central` and resolves to US Central —
      * wrong zone AND a dangling " European Time" left in the message.
      */
+    /**
+     * Zone tokens that are also ordinary English words. They have to be accepted —
+     * people write "5pm pacific" — but they are the ones that can swallow a place
+     * name, so [SPELLED_OUT_FOLLOWER] guards them and the abbreviations go free.
+     */
+    private val SPELLED_OUT = setOf(
+        "eastern", "central", "mountain", "pacific", "alaska", "hawaii",
+        "london", "tokyo", "singapore", "sydney", "india",
+    )
+
+    /**
+     * What may legitimately follow a spelled-out zone word.
+     *
+     * "5pm Central Park" used to render "5pm CT (…) Park", destroying the sentence
+     * in front of the recipient; so did Mountain View, London Bridge, India Gate,
+     * Sydney Opera House and Pacific Coast Highway. Worse, "5pm Eastern Europe"
+     * resolved to *US Eastern* — the multi-word alias is "eastern european", not
+     * "eastern europe", so the bare token won and the zone was wrong by six hours.
+     *
+     * A following capitalised word means the writer is naming a place, not a zone.
+     * Lowercase words, punctuation, end-of-text and the zone suffixes we already
+     * consume are all fine. Getting this wrong in the safe direction costs a
+     * conversion the user can redo; getting it wrong in the other direction
+     * corrupts a message they have already sent.
+     */
+    private val SPELLED_OUT_FOLLOWER = Regex("""^$SP+([A-Z][a-z]{2,})""")
+
+    /** Words that are part of a zone name rather than the start of a place name. */
+    private val ZONE_SUFFIX_WORDS = setOf("time", "standard", "daylight", "summer", "european")
+
     private const val TZ_TOKENS = """
-              central$SP+european | eastern$SP+european
+              (?:utc|gmt) [+-] \d{1,2} (?: :? \d{2} )?
+            | central$SP+european | eastern$SP+european
             | et|est|edt|ct|cst|cdt|mt|mst|mdt|pt|pst|pdt|akst|akdt|hst
             | utc|gmt|bst|cet|cest|eet|eest|uk|cn
             | ist|jst|kst|sgt|hkt|aest|aedt|nzst|nzdt
@@ -123,12 +154,46 @@ object TimeParser {
     )
 
     /**
-     * A zone-looking token we do NOT support (NPT, ACST, MSK, WAT…). When one of
-     * these follows a time we must stay out of the way: the user clearly named a
-     * zone, so falling back to the system zone would relabel their time as
-     * something else entirely ("call 7pm NPT" → "call 7pm ET (…) NPT").
+     * A zone-shaped token immediately after a time we could not attach a zone to.
+     *
+     * Two cases, and we decline for both:
+     *
+     *  - A zone we don't support (NPT, ACST, MSK, WAT). The user clearly named a
+     *    zone, so falling back to the system zone relabels their time as something
+     *    else entirely ("call 7pm NPT" → "call 7pm ET (…) NPT").
+     *  - A zone we *do* support, which the pattern nevertheless failed to consume
+     *    because something sits between it and the time. This is the more common
+     *    and more damaging case: "Standup is **5pm** CT" is ordinary Slack and
+     *    WhatsApp bold, and the closing asterisks defeated the match, so the time
+     *    was silently reattributed to the device zone. The writer typed CT and the
+     *    message went out saying ET.
+     *
+     * Hence a gap class rather than plain whitespace: any run of markup, quotes or
+     * brackets between the time and the token still counts as "the writer named a
+     * zone here". Leaving the text alone is the safe answer for both.
+     *
+     * Sentence punctuation is excluded from that gap on purpose. It ends the
+     * clause, so what follows is a new sentence rather than a zone attached to this
+     * time — without the exclusion, "lets meet at 5pm. OK so then…" and "3pm. FYI"
+     * both stop converting, which is a safe failure but a needless one.
+     *
+     * Case-sensitive on purpose. An all-caps run is what makes a bare token read as
+     * a zone abbreviation instead of an ordinary word; accepting lowercase would
+     * make "see you at 5pm ok" decline. Lowercase unsupported tokens ("call 5pm
+     * msk") consequently still slip through — that is a known gap with a corpus
+     * row, not an oversight.
      */
-    private val UNKNOWN_ZONE_TOKEN = Regex("""^$SP*([A-Z]{2,5})\b""")
+    private val TRAILING_ZONE_TOKEN = Regex("""^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b""")
+
+    /**
+     * A URL or path scheme at the very start of the token the match sits in.
+     *
+     * "see https://x.com/a/5pm now" was rewritten to
+     * "see https://x.com/a/5pm ET (4pm CT · …) now" — the link is destroyed, and the
+     * user has no way to tell until somebody clicks it. Nothing shaped like this is
+     * ever a time a reader needs converted.
+     */
+    private val URL_SCHEME = Regex("""(?i)^(?:[a-z][a-z0-9+.-]*://|www\.|mailto:)""")
 
     /**
      * A stamp is only ever emitted directly after the source time, so "(6pm PT)" on
@@ -138,6 +203,24 @@ object TimeParser {
      */
     private val TIME_BEFORE_STAMP =
         Regex("""\d{1,2}(?::\d{2})?(?:am|pm)$SP+[A-Za-z][A-Za-z0-9+:/_-]*$SP*$""", RegexOption.IGNORE_CASE)
+
+    /**
+     * True when the match sits inside a URL or a path.
+     *
+     * Judged from what precedes the match within its own non-space token, not from
+     * the token as a whole. A slash *after* the match is ordinary writing — "5pm
+     * EST/EDT" is a zone pair we deliberately support, and "5pm ET/PT" is someone
+     * naming two zones — whereas a slash *before* it, inside the same token, means
+     * we are somewhere in a path. Scanning the whole token declines both, which
+     * cost the EST/EDT case the first time this was written.
+     */
+    private fun isInsideUrlOrPath(text: String, range: IntRange): Boolean {
+        var start = range.first
+        while (start > 0 && text[start - 1] !in SPACE_CHARS) start--
+        if (start == range.first) return false
+        val prefix = text.substring(start, range.first)
+        return prefix.contains('/') || URL_SCHEME.containsMatchIn(prefix)
+    }
 
     /** Ranges occupied by stamps this tool rendered earlier. */
     private fun stampRanges(text: String): List<IntRange> =
@@ -160,6 +243,9 @@ object TimeParser {
             val before = text.getOrNull(m.range.first - 1)
             if (before != null && (before.isDigit() || before == ':' || before == '.')) continue
 
+            // Inside a URL or a path — never a time meant for a reader.
+            if (isInsideUrlOrPath(text, m.range)) continue
+
             val keywordRaw = m.groups["keyword"]?.value?.lowercase()
             val tzRaw = m.groups["tz"]?.value
                 ?: m.groups["tzparen"]?.value
@@ -167,11 +253,19 @@ object TimeParser {
             val hasTz = !tzRaw.isNullOrEmpty()
             val zone = if (hasTz) TimeZoneAlias.resolve(tzRaw!!) ?: defaultZone else defaultZone
 
-            // The writer named a zone we don't know — decline rather than guess.
-            if (!hasTz) {
-                val after = text.substring(minOf(m.range.last + 1, text.length))
-                val token = UNKNOWN_ZONE_TOKEN.find(after)?.groupValues?.get(1)
-                if (token != null && !TimeZoneAlias.isKnownToken(token)) continue
+            val after = text.substring(minOf(m.range.last + 1, text.length))
+
+            // A zone token sits right there but we did not consume it — either we
+            // don't support it, or something (markup, punctuation) separated it
+            // from the time. Guessing the device zone would relabel the writer's
+            // own words; decline instead.
+            if (!hasTz && TRAILING_ZONE_TOKEN.containsMatchIn(after)) continue
+
+            // A spelled-out zone word followed by a capitalised word is a place
+            // name — "Central Park", not US Central.
+            if (hasTz && tzRaw!!.lowercase() in SPELLED_OUT) {
+                val follower = SPELLED_OUT_FOLLOWER.find(after)?.groupValues?.get(1)
+                if (follower != null && follower.lowercase() !in ZONE_SUFFIX_WORDS) continue
             }
 
             val (hour24, minute) = when (keywordRaw) {

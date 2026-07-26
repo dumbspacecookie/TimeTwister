@@ -81,8 +81,17 @@ object TimeConverter {
      * result *later* by the gap. That turned "deploy at 2:30am ET" into "deploy at
      * 3:30am ET (…)" — rewriting the user's own words to a time they did not type.
      * We would rather leave the text untouched and let a human sort it out.
+     *
+     * Public, and not merely because [splice] needs it. [renderStamp] does **not**
+     * apply this check — it renders whatever it is handed — so every caller that
+     * reaches renderStamp directly has to ask this question itself. Two shipped
+     * ones did not: the read-only branch of Android's ProcessTextActivity and the
+     * iOS keyboard's suggestion bar both rendered straight from a DetectedTime, and
+     * both duly showed "3:30am ET" for a typed "2:30am ET" — the exact rewrite the
+     * comment above says we refuse. The guard was tested, but only through splice,
+     * which is not the function those hosts call.
      */
-    internal fun isUnrepresentable(detected: DetectedTime, now: ZonedDateTime): Boolean {
+    fun isUnrepresentable(detected: DetectedTime, now: ZonedDateTime): Boolean {
         val local = LocalTime.of(detected.hour, detected.minute)
         val resolved = absoluteInstant(detected, now)
         return resolved.toLocalTime() != local

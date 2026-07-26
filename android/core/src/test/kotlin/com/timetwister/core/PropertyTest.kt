@@ -48,8 +48,38 @@ class PropertyTest {
                         " but got " + show(out)
                 out.length < prefix.length + suffix.length ->
                     "output is shorter than the untouched context: " + show(out)
-                else -> null
+                else -> exactReconstruction(input, detected, targets, out)
             }
+        }
+    }
+
+    /**
+     * The three checks above say the context survives at both ends. They do not say
+     * that *nothing else* got in between, and that gap is not hypothetical: the
+     * Swift core was found duplicating a character in the middle of the splice,
+     * leaving both ends intact, and all three passed while the message was
+     * corrupted. Reconstructing the whole expected string is what closes it.
+     *
+     * Only meaningful when splice actually rewrote something and absorbed no
+     * trailing stamp — both of those take paths this cannot predict.
+     */
+    private fun exactReconstruction(
+        input: String,
+        detected: DetectedTime,
+        targets: List<ZoneId>,
+        out: String,
+    ): String? {
+        if (TimeParser.trailingStampRange(input, detected.range.last + 1) != null) return null
+        if (TimeConverter.isUnrepresentable(detected, NOW)) return null
+        val expected = input.substring(0, detected.range.first) +
+            TimeConverter.renderStamp(detected, targets, NOW) +
+            input.substring(detected.range.last + 1)
+        return if (out == expected) {
+            null
+        } else {
+            "output is not exactly prefix + stamp + suffix:\n" +
+                "        expected " + show(expected) + "\n" +
+                "        actual   " + show(out)
         }
     }
 
@@ -436,9 +466,27 @@ class PropertyTest {
             "\uD83C\uDF89 ", "the top 5 est. results, ",
         )
 
+        /**
+         * The trailing five are combining/joining characters, and they sit here
+         * rather than in [ASTRAL] because *position* is the whole point: they land
+         * immediately after the match end, which is the one place a splice can round
+         * a UTF-16 boundary into the middle of a grapheme cluster.
+         *
+         * Added 2026-07-25 after the Swift core was found duplicating a character
+         * there \u2014 and after the freshly ported property test failed to notice,
+         * because every astral case in this generator is a *prefix* and every suffix
+         * was an ordinary word. A detector that cannot reach the defect it was
+         * written for is not a detector. Both cores carry the same list so they
+         * keep exploring identical inputs.
+         */
         private val SUFFIXES: Array<String> = arrayOf(
             "", "", " tomorrow", " ok?", "!", ".", ", thanks", " sharp", "\n", " \uD83D\uDE80",
             " and then dinner",
+            "\u0301", // combining acute
+            "\u200D", // zero-width joiner
+            "\uFE0F", // variation selector-16
+            "\u064B", // Arabic fathatan
+            "\u0E31", // Thai mai han akat
         )
 
         private val MERIDIEMS: Array<String> = arrayOf(

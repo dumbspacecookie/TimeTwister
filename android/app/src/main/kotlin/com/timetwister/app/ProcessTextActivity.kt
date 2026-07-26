@@ -60,6 +60,17 @@ class ProcessTextActivity : Activity() {
                 // disambiguator", so show what a parseable selection looks like.
                 toast(getString(R.string.toast_no_time_found), Toast.LENGTH_LONG)
 
+            // The time the user wrote does not exist on the day it resolves to (the
+            // hour a spring-forward transition removes). renderStamp below would
+            // happily render the shifted time, so this has to be caught here rather
+            // than relied upon from splice — the read-only branch never calls splice
+            // for what it displays. Say so instead of failing silently.
+            TimeConverter.isUnrepresentable(detected, now) ->
+                toast(
+                    getString(R.string.toast_time_does_not_exist, detected.originalText),
+                    Toast.LENGTH_LONG,
+                )
+
             readOnly -> {
                 val stamp = TimeConverter.renderStamp(detected, targets, now)
                 // Clipboard gets the whole converted selection, not just the stamp: the user

@@ -55,10 +55,15 @@ public final class KeyboardViewController: UIInputViewController {
 
         // We look at the most recent time phrase before the cursor —
         // that's what the user just typed and is most likely to want converted.
-        let beforeMatches = TimeParser.detect(in: before)
+        //
+        // A time inside a spring-forward DST gap is dropped rather than offered:
+        // `renderStamp` applies no such check, so suggesting it would put a time
+        // the user did not type on the bar and one tap away from their message.
+        let candidate = TimeParser.detect(in: before).last
+            .flatMap { TimeConverter.isUnrepresentable($0) ? nil : $0 }
         let targets = UserPreferences.shared.targetZones
         suggestionBar.setSuggestion(
-            detected: beforeMatches.last,
+            detected: candidate,
             targets: targets
         )
     }
@@ -74,8 +79,17 @@ public final class KeyboardViewController: UIInputViewController {
         let nsBefore = before as NSString
         let tail = nsBefore.length - detected.range.location - detected.range.length
         if tail == 0 {
-            // The detected phrase sits right at the cursor. Delete its characters.
-            for _ in 0..<detected.range.length {
+            // The detected phrase sits right at the cursor. Delete it.
+            //
+            // The loop count must be in GRAPHEMES, not UTF-16 units:
+            // `deleteBackward()` removes one user-perceived character, while
+            // `detected.range.length` counts code units. Any emoji, flag, accented
+            // letter or non-Latin cluster inside the phrase made the two disagree,
+            // and the loop then ate that many extra characters of whatever the user
+            // had written before it. An astral emoji counts 2, a flag 4, a
+            // ZWJ family sequence up to 11.
+            let phrase = (before as NSString).substring(with: detected.range)
+            for _ in 0..<phrase.count {
                 textDocumentProxy.deleteBackward()
             }
             textDocumentProxy.insertText(stamp)

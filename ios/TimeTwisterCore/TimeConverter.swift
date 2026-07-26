@@ -82,7 +82,6 @@ public enum TimeConverter {
         if isUnrepresentable(detected, now: now) { return input }
 
         let stamp = renderStamp(for: detected, targets: targets, now: now)
-        let ns = input as NSString
         let end = detected.range.location + detected.range.length
 
         // If our own stamp already follows this time, replace it rather than nesting
@@ -91,11 +90,41 @@ public enum TimeConverter {
         let trailing = TimeParser.trailingStampRange(in: input, from: end)
         let replaceEnd = trailing.map { $0.location + $0.length } ?? end
 
-        return ns.replacingCharacters(
-            in: NSRange(location: detected.range.location,
-                        length: replaceEnd - detected.range.location),
+        return replacingUTF16(
+            in: input,
+            range: detected.range.location..<replaceEnd,
             with: stamp
         )
+    }
+
+    /// Replace a half-open UTF-16 range, exactly.
+    ///
+    /// `NSString.replacingCharacters(in:with:)` cannot be used here.
+    /// `NSRegularExpression` reports true UTF-16 offsets, but on
+    /// swift-corelibs that method rounds a boundary landing *inside* a grapheme
+    /// cluster down to the start of the cluster — so "5pm CT" followed by a
+    /// combining acute spliced as "…)T" with the T duplicated, and the user's
+    /// message went out corrupted. Apple's Foundation is exact, which is worse than
+    /// it sounds: it meant the Windows and Linux runners disagreed with the device
+    /// for the corpus's own blocking `unicode` category, and the whole claim that
+    /// this core can be verified off a Mac rested on them agreeing.
+    ///
+    /// A differential run against the Kotlin core found ~100 inputs affected —
+    /// combining marks in Arabic, Thai, Hebrew, Devanagari and Tibetan, plus ZWJ,
+    /// variation selectors, keycaps and skin-tone modifiers.
+    ///
+    /// Working directly in code units sidesteps the whole question: no grapheme
+    /// boundary is consulted, so there is nothing to round.
+    private static func replacingUTF16(
+        in input: String,
+        range: Range<Int>,
+        with replacement: String
+    ) -> String {
+        var units = Array(input.utf16)
+        let lower = min(max(range.lowerBound, 0), units.count)
+        let upper = min(max(range.upperBound, lower), units.count)
+        units.replaceSubrange(lower..<upper, with: Array(replacement.utf16))
+        return String(utf16CodeUnits: units, count: units.count)
     }
 
     /// Decide what to return to a host that handed us an editable selection:
@@ -160,7 +189,16 @@ public enum TimeConverter {
     /// instant *after* the gap. That turned "deploy at 2:30am ET" into "deploy at
     /// 3:30am ET (…)" — rewriting the user's own words to a time they did not
     /// type. We would rather leave the text untouched and let a human sort it out.
-    static func isUnrepresentable(_ detected: DetectedTime, now: Date) -> Bool {
+    ///
+    /// Public, and not merely because `splice` needs it. `renderStamp` does **not**
+    /// apply this check — it renders whatever it is handed — so every caller that
+    /// reaches renderStamp directly has to ask this question itself. Two shipped
+    /// ones did not: the read-only branch of Android's ProcessTextActivity and this
+    /// platform's keyboard suggestion bar both rendered straight from a
+    /// DetectedTime, and both duly showed "3:30am ET" for a typed "2:30am ET" — the
+    /// exact rewrite the comment above says we refuse. The guard was tested, but
+    /// only through splice, which is not the function those hosts call.
+    public static func isUnrepresentable(_ detected: DetectedTime, now: Date = Date()) -> Bool {
         let resolved = absoluteDate(for: detected, now: now)
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = detected.timeZone

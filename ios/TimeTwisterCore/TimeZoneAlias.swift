@@ -132,14 +132,49 @@ public enum TimeZoneAlias {
         "America/Anchorage": ("AKST", "AKDT"),
     ]
 
+    /// An explicit UTC offset, written the way we render one: "UTC+2", "GMT-5",
+    /// "UTC+5:30", "utc+0530".
+    ///
+    /// This exists because `offsetLabel` *emits* this shape for every zone outside
+    /// the tables above, and the parser has to be able to read back everything we
+    /// emit. Before it did, "3pm UTC+2" parsed as the zone `UTC` with a stray "+2"
+    /// left dangling outside the stamp, and any second pass over our own output for
+    /// one of the ~400 unlisted zones nested a fresh stamp inside the last one.
+    ///
+    /// It is also simply what people write. Everyone outside the handful of regions
+    /// with a famous abbreviation says "UTC+2", and until now that was a guaranteed
+    /// garble on the first pass.
+    private static let offsetToken = try! NSRegularExpression(
+        pattern: #"^(?:utc|gmt)([+-])(\d{1,2})(?::?(\d{2}))?$"#
+    )
+
     /// Lowercase, trim, and collapse any run of whitespace to a single space, so
     /// multi-word aliases match however the writer spaced them. The pattern
-    /// accepts `\s+` between the words, and "central  european" (or one split
+    /// accepts a separator between the words, and "central  european" (or one split
     /// across a line break) has to land on the same key as "central european".
     private static func normalise(_ raw: String) -> String {
         raw.lowercased()
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
+    }
+
+    /// Parse "utc+5:30" into a fixed-offset zone, or nil if it isn't that shape.
+    private static func resolveOffset(_ key: String) -> TimeZone? {
+        let ns = key as NSString
+        guard let m = offsetToken.firstMatch(
+            in: key, range: NSRange(location: 0, length: ns.length)
+        ) else { return nil }
+
+        func part(_ i: Int) -> String? {
+            let r = m.range(at: i)
+            return r.location == NSNotFound ? nil : ns.substring(with: r)
+        }
+        guard let sign = part(1), let hours = part(2).flatMap(Int.init) else { return nil }
+        let minutes = part(3).flatMap(Int.init) ?? 0
+        guard hours <= 18, minutes <= 59 else { return nil }
+
+        let magnitude = hours * 3600 + minutes * 60
+        return TimeZone(secondsFromGMT: sign == "-" ? -magnitude : magnitude)
     }
 
     /// True when `raw` is a zone token this app actually understands.
@@ -150,14 +185,17 @@ public enum TimeZoneAlias {
     /// answer, or an unsupported token looks supported and the time gets
     /// relabelled with the system zone.
     public static func isKnownToken(_ raw: String) -> Bool {
-        map[normalise(raw)] != nil
+        let key = normalise(raw)
+        return map[key] != nil || resolveOffset(key) != nil
     }
 
     /// Resolve a user-written TZ token (case-insensitive) to a Foundation `TimeZone`.
     public static func resolve(_ raw: String) -> TimeZone? {
-        if let iana = map[normalise(raw)], let tz = TimeZone(identifier: iana) {
+        let key = normalise(raw)
+        if let iana = map[key], let tz = TimeZone(identifier: iana) {
             return tz
         }
+        if let offset = resolveOffset(key) { return offset }
         // Fallback: Foundation knows some identifiers we don't list.
         //
         // `TimeZone(abbreviation:)` is deliberately NOT in this chain. It accepts
@@ -184,26 +222,23 @@ public enum TimeZoneAlias {
             return tz.isDaylightSavingTime(for: date) ? pair.daylight : pair.standard
         }
 
-        // Anything we don't carry a spelling for: take the platform's word for it
-        // when it has one, otherwise render the offset ourselves.
-        if let date, let abbr = tz.abbreviation(for: date), isWordLabel(abbr) {
-            return abbr
-        }
-
+        // Everything else gets an offset. We deliberately do NOT ask the platform
+        // for an abbreviation here any more, for two reasons found by measurement:
+        //
+        //  - It is not the same everywhere. java.time on a desktop JVM, ICU on
+        //    Android, and swift-corelibs on a CI runner disagree about which zones
+        //    have a name, so the same message rendered "11pm CEST" on one and
+        //    "11pm UTC+2" on another. A differential run over both cores found all
+        //    20 tested unlisted zones diverging on exactly this call.
+        //  - Where it does have a name, that name is not necessarily ours.
+        //    Europe/Dublin abbreviates to "IST" in summer, and `map["ist"]` is
+        //    Asia/Kolkata — so a Dublin user's 5pm was labelled in a way that
+        //    re-parses four and a half hours away.
+        //
+        // An offset is plainer than "CEST", and it is the same on every platform,
+        // never wrong, and always readable back by `offsetToken`. That trade is
+        // worth it: this label goes out in somebody's message.
         return offsetLabel(tz, at: date)
-    }
-
-    /// True for a real word-shaped abbreviation ("CEST", "AEDT", "NZDT") and
-    /// false for every offset-shaped stand-in Foundation produces when it has no
-    /// abbreviation to give.
-    ///
-    /// Those stand-ins are not written the same way everywhere: Apple's
-    /// Foundation and `java.time` say "GMT+05:45", swift-corelibs can say
-    /// "+0545". Rejecting on *shape* — letters only — catches all of them,
-    /// including whatever a future platform invents, and hands the label to
-    /// `offsetLabel` so there is one offset rendering instead of three.
-    private static func isWordLabel(_ s: String) -> Bool {
-        !s.isEmpty && s.allSatisfy { $0.isLetter } && s != "GMT" && s != "UTC"
     }
 
     /// "UTC+5:30" / "UTC-4" — always meaningful, never a raw IANA id.

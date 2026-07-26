@@ -50,15 +50,47 @@ final class TimeZoneAliasTests: XCTestCase {
         }
     }
 
-    /// Whatever the platform's abbreviation table says, an unlisted zone must end
-    /// up with either a word-shaped abbreviation or our own "UTC±h[:mm]" form —
-    /// never Foundation's "GMT+05:45" / "+0545" stand-ins, which vary by platform.
-    func testShortLabelIsEitherAWordOrOurOwnOffsetForm() throws {
-        for id in ["Asia/Kathmandu", "Asia/Tehran", "America/St_Johns", "Pacific/Marquesas"] {
-            let label = TimeZoneAlias.shortLabel(for: try zone(id), at: january)
-            let isWord = label.allSatisfy { $0.isLetter }
-            let isOurOffset = label == "UTC" || label.hasPrefix("UTC+") || label.hasPrefix("UTC-")
-            XCTAssertTrue(isWord || isOurOffset, "\(id) produced an off-contract label: \(label)")
+    /// An unlisted zone gets our own "UTC±h[:mm]" form, exactly, on every platform.
+    ///
+    /// This was previously written as "a word-shaped abbreviation OR our offset
+    /// form", to accommodate `TimeZone.abbreviation(for:)` answering "CEST" on
+    /// Apple's Foundation and an offset-shaped stand-in on swift-corelibs. That
+    /// disjunction was the bug: a contract loose enough to accept both spellings
+    /// certified a core that rendered "11pm CEST" on a phone and "11pm UTC+2" on
+    /// CI, and a differential run later found all 20 tested unlisted zones
+    /// diverging on exactly this call. The fix was to stop asking the platform at
+    /// all, which means the answer is now single-valued and the test can say so.
+    func testUnlistedZonesGetOurOwnOffsetForm() throws {
+        let expected = [
+            "Asia/Kathmandu": "UTC+5:45",
+            "Asia/Tehran": "UTC+3:30",
+            "Pacific/Marquesas": "UTC-9:30",
+            "Europe/Berlin": "UTC+1",
+            "America/Toronto": "UTC-5",
+            "Asia/Dubai": "UTC+4",
+            "Europe/Dublin": "UTC",
+        ]
+        for (id, label) in expected {
+            XCTAssertEqual(
+                TimeZoneAlias.shortLabel(for: try zone(id), at: january), label, id
+            )
+        }
+    }
+
+    /// Europe/Dublin is the specific trap worth naming: its summer abbreviation is
+    /// "IST", and `map["ist"]` is Asia/Kolkata. Emitting the platform's word there
+    /// labelled a Dublin user's time in a way that re-reads four and a half hours
+    /// away, on iOS only — invisible to every test run off a Mac.
+    func testDublinIsNeverLabelledAsIndianStandardTime() throws {
+        let dublin = try zone("Europe/Dublin")
+        for at in [january, july] {
+            let label = TimeZoneAlias.shortLabel(for: dublin, at: at)
+            XCTAssertNotEqual(label, "IST", "Dublin must not borrow India's abbreviation")
+            let back = try XCTUnwrap(TimeZoneAlias.resolve(label))
+            XCTAssertEqual(
+                back.secondsFromGMT(for: at), dublin.secondsFromGMT(for: at),
+                "label '\(label)' does not read back to Dublin's offset"
+            )
         }
     }
 

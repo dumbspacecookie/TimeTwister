@@ -2,8 +2,6 @@ package com.timetwister.core
 
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /**
  * Resolves common human-written timezone names to IANA identifiers.
@@ -131,7 +129,21 @@ object TimeZoneAlias {
         "America/Anchorage" to ("AKST" to "AKDT"),
     )
 
-    private val abbreviation = DateTimeFormatter.ofPattern("zzz", Locale.US)
+    /**
+     * An explicit UTC offset, written the way we render one: "UTC+2", "GMT-5",
+     * "UTC+5:30", "utc+0530".
+     *
+     * This exists because [offsetLabel] *emits* this shape for every zone outside
+     * the tables above, and the parser has to be able to read back everything we
+     * emit. Before it did, "3pm UTC+2" parsed as the zone `UTC` with a stray "+2"
+     * left dangling outside the stamp, and any second pass over our own output for
+     * one of the ~400 unlisted zones nested a fresh stamp inside the last one.
+     *
+     * It is also simply what people write. Everyone outside the handful of
+     * regions with a famous abbreviation says "UTC+2", and until now that was a
+     * guaranteed garble on the first pass.
+     */
+    private val OFFSET_TOKEN = Regex("""^(?:utc|gmt)([+-])(\d{1,2})(?::?(\d{2}))?$""")
 
     /**
      * True when [raw] is a zone token this app actually understands.
@@ -141,20 +153,34 @@ object TimeZoneAlias {
      * name a zone I support?" need this stricter answer, or an unsupported token
      * looks supported and the time gets relabelled with the system zone.
      */
-    fun isKnownToken(raw: String): Boolean =
-        map.containsKey(raw.lowercase().trim().replace(Regex("\\s+"), " "))
+    fun isKnownToken(raw: String): Boolean {
+        val key = normalise(raw)
+        return map.containsKey(key) || OFFSET_TOKEN.matches(key)
+    }
 
     /** Resolve a user-written TZ token (case-insensitive) to a ZoneId. */
     fun resolve(raw: String): ZoneId? {
         // Multi-word aliases ("central european") may arrive with any run of
-        // whitespace between the words, since the pattern accepts `\s+` there.
-        val key = raw.lowercase().trim().replace(Regex("\\s+"), " ")
+        // whitespace between the words, since the pattern accepts a separator there.
+        val key = normalise(raw)
         map[key]?.let { iana ->
             runCatching { ZoneId.of(iana) }.getOrNull()?.let { return it }
+        }
+        OFFSET_TOKEN.matchEntire(key)?.let { m ->
+            val sign = if (m.groupValues[1] == "-") -1 else 1
+            val hours = m.groupValues[2].toIntOrNull() ?: return@let
+            val minutes = m.groupValues[3].toIntOrNull() ?: 0
+            if (hours > 18 || minutes > 59) return@let
+            return runCatching {
+                java.time.ZoneOffset.ofHoursMinutes(sign * hours, sign * minutes)
+            }.getOrNull()
         }
         // Fallback: java.time handles some abbreviations and direct IDs itself.
         return runCatching { ZoneId.of(raw) }.getOrNull()
     }
+
+    private fun normalise(raw: String): String =
+        raw.lowercase().trim().replace(Regex("\\s+"), " ")
 
     /**
      * Stable short label we render to users (e.g. "ET", "PT", "UTC").
@@ -175,14 +201,24 @@ object TimeZoneAlias {
             DST_ABBREVIATIONS[zone.id]?.let { (standard, daylight) ->
                 return if (zone.rules.isDaylightSavings(at.toInstant())) daylight else standard
             }
-
-            // Anything we don't carry a spelling for: take the platform's word for
-            // it when it has one. java.time falls back to "GMT+11:00" style output
-            // when it does not; prefer our own offset rendering in that case.
-            val abbr = abbreviation.format(at.withZoneSameInstant(zone))
-            if (abbr.isNotEmpty() && !abbr.startsWith("GMT") && !abbr.startsWith("UTC")) return abbr
         }
 
+        // Everything else gets an offset. We deliberately do NOT ask the platform
+        // for an abbreviation here any more, for two reasons found by measurement:
+        //
+        //  - It is not the same everywhere. java.time on a desktop JVM, ICU on
+        //    Android, and swift-corelibs on a CI runner disagree about which zones
+        //    have a name, so the same message rendered "11pm CEST" on one and
+        //    "11pm UTC+2" on another. A differential run over both cores found all
+        //    20 tested unlisted zones diverging on exactly this call.
+        //  - Where it does have a name, that name is not necessarily ours.
+        //    Europe/Dublin abbreviates to "IST" in summer, and `map["ist"]` is
+        //    Asia/Kolkata — so a Dublin user's 5pm was labelled in a way that
+        //    re-parses four and a half hours away.
+        //
+        // An offset is plainer than "CEST", and it is the same on every platform,
+        // never wrong, and always readable back by [OFFSET_TOKEN]. That trade is
+        // worth it: this label goes out in somebody's message.
         return offsetLabel(zone, at)
     }
 
@@ -195,6 +231,12 @@ object TimeZoneAlias {
         val sign = if (totalMinutes < 0) "-" else "+"
         val hours = kotlin.math.abs(totalMinutes) / 60
         val minutes = kotlin.math.abs(totalMinutes) % 60
-        return if (minutes == 0) "UTC$sign$hours" else "UTC$sign$hours:${"%02d".format(minutes)}"
+        // Padded by hand rather than with "%02d".format(): String.format uses the
+        // default locale, and in a locale with non-ASCII digits (fa, ar-SA, some
+        // Indic locales) that renders a label the parser cannot read back — the
+        // exact round-trip failure this whole file is arranged to prevent, in a
+        // form that would never show up on an en-US test machine.
+        val mm = if (minutes < 10) "0$minutes" else "$minutes"
+        return if (minutes == 0) "UTC$sign$hours" else "UTC$sign$hours:$mm"
     }
 }

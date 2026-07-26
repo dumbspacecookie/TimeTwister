@@ -74,8 +74,37 @@ public enum TimeParser {
     /// Zone tokens, longest-first: multi-word names must beat their own prefixes, or
     /// "3pm Central European Time" matches `central` and resolves to US Central —
     /// wrong zone AND a dangling " European Time" left in the message.
+    /// Zone tokens that are also ordinary English words. They have to be accepted —
+    /// people write "5pm pacific" — but they are the ones that can swallow a place
+    /// name, so `spelledOutFollower` guards them and the abbreviations go free.
+    private static let spelledOut: Set<String> = [
+        "eastern", "central", "mountain", "pacific", "alaska", "hawaii",
+        "london", "tokyo", "singapore", "sydney", "india",
+    ]
+
+    /// What may legitimately follow a spelled-out zone word.
+    ///
+    /// "5pm Central Park" used to render "5pm CT (…) Park", destroying the sentence
+    /// in front of the recipient; so did Mountain View, London Bridge, India Gate,
+    /// Sydney Opera House and Pacific Coast Highway. Worse, "5pm Eastern Europe"
+    /// resolved to *US Eastern* — the multi-word alias is "eastern european", not
+    /// "eastern europe", so the bare token won and the zone was wrong by six hours.
+    ///
+    /// A following capitalised word means the writer is naming a place, not a zone.
+    /// Lowercase words, punctuation, end-of-text and the zone suffixes we already
+    /// consume are all fine. Getting this wrong in the safe direction costs a
+    /// conversion the user can redo; getting it wrong in the other direction
+    /// corrupts a message they have already sent.
+    private static let spelledOutFollower =
+        try! NSRegularExpression(pattern: #"^\#(SP)+([A-Z][a-z]{2,})"#)
+
+    /// Words that are part of a zone name rather than the start of a place name.
+    private static let zoneSuffixWords: Set<String> =
+        ["time", "standard", "daylight", "summer", "european"]
+
     private static let tzTokens = #"""
-              central\#(SP)+european | eastern\#(SP)+european
+              (?:utc|gmt) [+-] \d{1,2} (?: :? \d{2} )?
+            | central\#(SP)+european | eastern\#(SP)+european
             | et|est|edt|ct|cst|cdt|mt|mst|mdt|pt|pst|pdt|akst|akdt|hst
             | utc|gmt|bst|cet|cest|eet|eest|uk|cn
             | ist|jst|kst|sgt|hkt|aest|aedt|nzst|nzdt
@@ -159,15 +188,47 @@ public enum TimeParser {
         )
     }()
 
-    /// A zone-looking token we do NOT support (NPT, ACST, MSK, WAT…). When one of
-    /// these follows a time we must stay out of the way: the user clearly named a
-    /// zone, so falling back to the system zone would relabel their time as
-    /// something else entirely ("call 7pm NPT" → "call 7pm ET (…) NPT").
+    /// A zone-shaped token immediately after a time we could not attach a zone to.
     ///
-    /// Case-sensitive on purpose — an all-caps run is what makes a bare token read
-    /// as a zone abbreviation rather than an ordinary word.
-    private static let unknownZoneToken =
-        try! NSRegularExpression(pattern: #"^\#(SP)*([A-Z]{2,5})\b"#)
+    /// Two cases, and we decline for both:
+    ///
+    ///  - A zone we don't support (NPT, ACST, MSK, WAT). The user clearly named a
+    ///    zone, so falling back to the system zone relabels their time as something
+    ///    else entirely ("call 7pm NPT" → "call 7pm ET (…) NPT").
+    ///  - A zone we *do* support, which the pattern nevertheless failed to consume
+    ///    because something sits between it and the time. This is the more common
+    ///    and more damaging case: "Standup is **5pm** CT" is ordinary Slack and
+    ///    WhatsApp bold, and the closing asterisks defeated the match, so the time
+    ///    was silently reattributed to the device zone. The writer typed CT and the
+    ///    message went out saying ET.
+    ///
+    /// Hence a gap class rather than plain whitespace: any run of markup, quotes or
+    /// brackets between the time and the token still counts as "the writer named a
+    /// zone here". Leaving the text alone is the safe answer for both.
+    ///
+    /// Sentence punctuation is excluded from that gap on purpose. It ends the
+    /// clause, so what follows is a new sentence rather than a zone attached to this
+    /// time — without the exclusion, "lets meet at 5pm. OK so then…" and "3pm. FYI"
+    /// both stop converting, which is a safe failure but a needless one.
+    ///
+    /// Case-sensitive on purpose. An all-caps run is what makes a bare token read as
+    /// a zone abbreviation instead of an ordinary word; accepting lowercase would
+    /// make "see you at 5pm ok" decline. Lowercase unsupported tokens ("call 5pm
+    /// msk") consequently still slip through — that is a known gap with a corpus
+    /// row, not an oversight.
+    private static let trailingZoneToken =
+        try! NSRegularExpression(pattern: #"^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b"#)
+
+    /// A URL or path scheme at the very start of the token the match sits in.
+    ///
+    /// "see https://x.com/a/5pm now" was rewritten to
+    /// "see https://x.com/a/5pm ET (4pm CT · …) now" — the link is destroyed, and the
+    /// user has no way to tell until somebody clicks it. Nothing shaped like this is
+    /// ever a time a reader needs converted.
+    private static let urlScheme = try! NSRegularExpression(
+        pattern: #"^(?:[a-z][a-z0-9+.-]*://|www\.|mailto:)"#,
+        options: [.caseInsensitive]
+    )
 
     /// A stamp is only ever emitted directly after the source time, so "(6pm PT)" on
     /// its own is a user's parenthesised time, not our output — even though it is
@@ -177,6 +238,31 @@ public enum TimeParser {
         pattern: #"\d{1,2}(?::\d{2})?(?:am|pm)\#(SP)+[A-Za-z][A-Za-z0-9+:/_-]*\#(SP)*$"#,
         options: [.caseInsensitive]
     )
+
+    /// True when the match sits inside a URL or a path.
+    ///
+    /// Judged from what precedes the match within its own non-space token, not from
+    /// the token as a whole. A slash *after* the match is ordinary writing — "5pm
+    /// EST/EDT" is a zone pair we deliberately support, and "5pm ET/PT" is someone
+    /// naming two zones — whereas a slash *before* it, inside the same token, means
+    /// we are somewhere in a path. Scanning the whole token declines both, which
+    /// cost the EST/EDT case the first time this was written.
+    private static func isInsideUrlOrPath(_ ns: NSString, _ range: NSRange) -> Bool {
+        var start = range.location
+        while start > 0,
+              let c = ns.substring(with: NSRange(location: start - 1, length: 1)).first,
+              !spaceChars.contains(c) {
+            start -= 1
+        }
+        guard start < range.location else { return false }
+
+        let prefix = ns.substring(with: NSRange(location: start, length: range.location - start))
+        if prefix.contains("/") { return true }
+        let prefixNS = prefix as NSString
+        return urlScheme.firstMatch(
+            in: prefix, range: NSRange(location: 0, length: prefixNS.length)
+        ) != nil
+    }
 
     /// Ranges occupied by stamps this tool rendered earlier.
     private static func stampRanges(in text: String) -> [NSRange] {
@@ -220,10 +306,21 @@ public enum TimeParser {
 
             // A match glued to the right of a digit or a colon is a fragment of a
             // larger number, not a time: "9:5 am" would otherwise yield "5 am".
+            //
+            // `decimalDigits` (Unicode category Nd), not `Character.isNumber`.
+            // `isNumber` also covers No and Nl — superscripts, fractions, Roman
+            // numerals — so "²5pm ET" and "½noon" were skipped here while Kotlin,
+            // whose `isDigit` is Nd-only, detected them. A differential run over
+            // both cores found 98 such inputs.
             if m.range.location > 0 {
                 let prev = ns.substring(with: NSRange(location: m.range.location - 1, length: 1))
-                if prev == ":" || prev == "." || prev.first.map(\.isNumber) == true { continue }
+                let isDigit = prev.unicodeScalars.first
+                    .map(CharacterSet.decimalDigits.contains) ?? false
+                if prev == ":" || prev == "." || isDigit { continue }
             }
+
+            // Inside a URL or a path — never a time meant for a reader.
+            if isInsideUrlOrPath(ns, m.range) { continue }
 
             func group(_ name: String) -> String? {
                 let r = m.range(withName: name)
@@ -235,17 +332,25 @@ public enum TimeParser {
             let hasTz = !(tzRaw ?? "").isEmpty
             let zone = hasTz ? (TimeZoneAlias.resolve(tzRaw!) ?? defaultZone) : defaultZone
 
-            // The writer named a zone we don't know — decline rather than guess.
-            if !hasTz {
-                let end = min(m.range.location + m.range.length, ns.length)
-                let after = ns.substring(from: end)
-                let afterNS = after as NSString
-                if let hit = unknownZoneToken.firstMatch(
-                    in: after,
-                    range: NSRange(location: 0, length: afterNS.length)
-                ) {
-                    let token = afterNS.substring(with: hit.range(at: 1))
-                    if !TimeZoneAlias.isKnownToken(token) { continue }
+            let end = min(m.range.location + m.range.length, ns.length)
+            let after = ns.substring(from: end)
+            let afterNS = after as NSString
+            let afterRange = NSRange(location: 0, length: afterNS.length)
+
+            // A zone token sits right there but we did not consume it — either we
+            // don't support it, or something (markup, punctuation) separated it
+            // from the time. Guessing the device zone would relabel the writer's
+            // own words; decline instead.
+            if !hasTz, trailingZoneToken.firstMatch(in: after, range: afterRange) != nil {
+                continue
+            }
+
+            // A spelled-out zone word followed by a capitalised word is a place
+            // name — "Central Park", not US Central.
+            if hasTz, let raw = tzRaw, Self.spelledOut.contains(raw.lowercased()) {
+                if let hit = spelledOutFollower.firstMatch(in: after, range: afterRange) {
+                    let follower = afterNS.substring(with: hit.range(at: 1)).lowercased()
+                    if !Self.zoneSuffixWords.contains(follower) { continue }
                 }
             }
 

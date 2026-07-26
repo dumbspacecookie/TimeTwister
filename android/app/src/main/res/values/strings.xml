@@ -14,6 +14,14 @@
     <string name="toast_no_time_found">No time found — try \"5pm CT\" or \"17:00 ET\"</string>
     <string name="toast_readonly_copied">%1$s — copied (this text is read-only)</string>
     <string name="toast_selection_too_long">Selection too long — select just the line with the time</string>
+    <!--
+        Shown when the wall-clock time the user wrote does not exist on the day it
+        resolves to — the hour a spring-forward DST transition removes from the
+        local calendar. We refuse rather than silently shifting it, so we owe the
+        user an explanation; without one this path is indistinguishable from the
+        app being broken.
+    -->
+    <string name="toast_time_does_not_exist">%1$s doesn\'t exist that day — the clocks skip forward. Left your text alone.</string>
 
     <!-- Settings screen -->
     <string name="settings_intro">Long-press a time (e.g. \"5pm CT\") in any messaging app, pick TimeTwister from the selection menu, and your zones get appended inline.</string>
