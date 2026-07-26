@@ -57,6 +57,26 @@ final class EvalCorpusTests: XCTestCase {
         "must_detect", "must_not_detect", "whitespace", "unicode", "boundary", "idempotent",
     ]
 
+    /// Exact corpus composition, pinned — the mirror of `EXPECTED_CATEGORY_COUNTS`
+    /// in EvalCorpusTest.kt, and checked here too because the two harnesses read
+    /// the same file and must agree about what is in it.
+    ///
+    /// A gate that only checks a pass RATE can be satisfied by changing the
+    /// denominator, and every route to doing so looked innocent in review: delete
+    /// an inconvenient row, move one to a report-only category, or drop a name from
+    /// `blockingCategories` and derate twenty rows at once. None of those touches
+    /// the ratchet. Pinning the shape closes all three.
+    static let expectedCategoryCounts: [String: Int] = [
+        "ambiguous": 8,
+        "boundary": 6,
+        "idempotent": 8,
+        "known_gap": 1,
+        "must_detect": 106,
+        "must_not_detect": 86,
+        "unicode": 20,
+        "whitespace": 8,
+    ]
+
     /// Report-only categories: scored and printed, never fatal.
     static let reportingCategories = ["known_gap", "ambiguous", "unverified"]
 
@@ -101,6 +121,62 @@ final class EvalCorpusTests: XCTestCase {
     static let defaultZone = TimeZone(identifier: pinnedDefaultZone)!
 
     // MARK: - shape
+
+    /// The corpus is shared between the two cores; the settings it is scored under
+    /// were not. See eval/config.tsv for why that is the same bug one level up.
+    func testHarnessConfigMatchesTheSharedFile() throws {
+        let cfg = try Self.sharedConfig()
+
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        XCTAssertEqual(
+            iso.date(from: try XCTUnwrap(cfg["now"]))?.timeIntervalSince1970,
+            Self.now.timeIntervalSince1970,
+            "clock"
+        )
+        XCTAssertEqual(
+            cfg["targets"], Self.targets.map(\.identifier).joined(separator: ","), "targets"
+        )
+        XCTAssertEqual(cfg["default_zone"], Self.pinnedDefaultZone, "default zone")
+        XCTAssertEqual(
+            Double(try XCTUnwrap(cfg["min_blocking_pass_rate"])), Self.minBlockingPassRate,
+            "ratchet"
+        )
+        XCTAssertEqual(
+            cfg["blocking_categories"], Self.blockingCategories.joined(separator: ","),
+            "blocking categories"
+        )
+    }
+
+    /// Key/value pairs from eval/config.tsv, comments and header stripped.
+    static func sharedConfig() throws -> [String: String] {
+        let url = corpusURL().deletingLastPathComponent().appendingPathComponent("config.tsv")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        var out: [String: String] = [:]
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let s = String(line)
+            guard !s.hasPrefix("#"), !s.trimmingCharacters(in: .whitespaces).isEmpty else {
+                continue
+            }
+            let parts = s.components(separatedBy: "\t")
+            guard parts.count == 2, parts[0] != "key" else { continue }
+            out[parts[0]] = parts[1]
+        }
+        return out
+    }
+
+    func testCorpusCompositionIsPinned() throws {
+        let rows = try Self.corpus()
+        var actual: [String: Int] = [:]
+        for r in rows { actual[r.category, default: 0] += 1 }
+        XCTAssertEqual(
+            actual, Self.expectedCategoryCounts,
+            "corpus composition changed. If you added rows, update expectedCategoryCounts "
+                + "here AND EXPECTED_CATEGORY_COUNTS in EvalCorpusTest.kt in the same commit; "
+                + "if a count went DOWN, say why in the message."
+        )
+        XCTAssertEqual(rows.count, Self.expectedCategoryCounts.values.reduce(0, +))
+    }
 
     func testCorpusIsWellFormed() throws {
         let rows = try Self.corpus()
@@ -177,6 +253,33 @@ final class EvalCorpusTests: XCTestCase {
 
         print(report(rows, overall, blocking, byCategory, blockingFailures, reportedFailures))
 
+        // Checked BEFORE the rate, because the rate cannot check it. `Tally.ratio`
+        // returns 1.0 for an empty denominator so the report stays readable, which
+        // is harmless in a per-category line and not harmless at the top: a corpus
+        // that loaded zero blocking rows scores a flawless 100% and passes.
+        //
+        // On this side that is more than theoretical. `corpus()` throws XCTSkip when
+        // the file is not reachable, and a skip reports as a pass — so one missing
+        // file used to disarm the guard and the gate in the same motion.
+        XCTAssertGreaterThan(
+            blocking.total, 0,
+            "EVAL GATE FAILED: zero blocking rows were scored. The corpus did not load, or "
+                + "every blocking category was emptied. A pass rate over an empty set is not "
+                + "a pass."
+        )
+
+        // An independent floor, not derivable from the rate. False positives and
+        // false negatives are not equally bad here — a miss is invisible, a false
+        // positive garbles a message somebody already sent — so the moment anyone
+        // ratchets the rate below 1.0 they become tradeable against each other.
+        // This says they are not.
+        XCTAssertEqual(
+            blocking.falsePositives, 0,
+            "EVAL GATE FAILED: \(blocking.falsePositives) false positive(s) in blocking rows. "
+                + "A false positive rewrites text the user did not want rewritten; this floor "
+                + "holds regardless of what the pass rate is set to."
+        )
+
         XCTAssertGreaterThanOrEqual(
             blocking.passRate, Self.minBlockingPassRate - 1e-9,
             "EVAL GATE FAILED: blocking pass rate \(pct(blocking.passRate)) < required "
@@ -204,11 +307,22 @@ final class EvalCorpusTests: XCTestCase {
         if let cached { return cached }
 
         let url = corpusURL()
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            // Running from a bundle that isn't next to the repo — a simulator or
-            // device test run. The corpus is a build-machine measurement; skip
-            // loudly rather than fail.
-            throw XCTSkip("eval corpus not reachable at \(url.path) — run from a source checkout")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            // Skipping is only honest when we are genuinely somewhere the corpus
+            // could not be — a simulator or device bundle. In a source checkout a
+            // missing corpus is a broken build, and skipping it there would report
+            // as a pass and take the gate with it: every assertion in
+            // testCorpusScore, including the one that catches a zero-row eval,
+            // lives downstream of this call.
+            //
+            // The discriminator is whether this file's own directory exists. If it
+            // does, #filePath resolved against a real checkout and the corpus
+            // genuinely is missing.
+            let checkout = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            if FileManager.default.fileExists(atPath: checkout.path) {
+                throw CorpusError.missingFromCheckout(url.path)
+            }
+            throw XCTSkip("eval corpus not reachable at \(url.path) — not a source checkout")
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
@@ -268,6 +382,7 @@ final class EvalCorpusTests: XCTestCase {
     }
 
     enum CorpusError: Error, CustomStringConvertible {
+        case missingFromCheckout(String)
         case notUtf8
         case noHeader
         case badHeader(line: Int, got: String)
@@ -276,6 +391,12 @@ final class EvalCorpusTests: XCTestCase {
 
         var description: String {
             switch self {
+            case .missingFromCheckout(let path):
+                return "eval corpus missing at '\(path)' in what is otherwise a source "
+                    + "checkout. Both cores read this one file; if it moved, update "
+                    + "corpusPath here and CORPUS_RESOURCE in EvalCorpusTest.kt. This is a "
+                    + "failure rather than a skip on purpose — skipping here would report as "
+                    + "a pass and disarm the gate with it."
             case .notUtf8:
                 return "corpus contains U+FFFD — it was not saved as UTF-8. The expected outputs "
                     + "contain U+00B7 MIDDLE DOT; re-save corpus.tsv as UTF-8 without a BOM."

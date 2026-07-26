@@ -1,0 +1,36 @@
+# TimeTwister eval harness configuration
+# =============================================================================
+# Tab-separated key/value. Read by BOTH EvalCorpusTest.kt and EvalCorpusTests.swift.
+#
+# WHY THIS FILE EXISTS
+#
+# The corpus is shared — one file, read by both cores, so a row cannot say one
+# thing on Android and another on iOS. The settings the corpus is scored UNDER
+# were not: the clock, the target zones, the pinned default zone, the ratchet and
+# the blocking category list each existed as two independent literals in two test
+# files. Nothing compared them.
+#
+# That is the same failure the shared-corpus decision was made to prevent, one
+# level up. Change the clock in one core and the two would score the same rows
+# under different conditions while both printed a confident "100%".
+#
+# Each harness still declares these as ordinary typed constants — they are easier
+# to read that way, and a test file that fetches its own clock from a text file at
+# runtime is worse, not better. What each harness now does is ASSERT its constants
+# against this file. Divergence fails loudly instead of scoring silently.
+#
+# So: change a value here and in both harnesses, in the same commit.
+# =============================================================================
+key	value
+# The fixed clock, as an ISO-8601 instant. Mid-May on purpose: US DST on, UK on
+# BST, Australia/NZ off DST, and far from every transition, so the internal
+# roll-forward-a-day heuristic cannot move an offset out from under a row.
+now	2026-05-18T13:00:00Z
+# Rendered in this order, as CT / ET / PT / UK.
+targets	America/Chicago,America/New_York,America/Los_Angeles,Europe/London
+# What a time with no zone token is attributed to.
+default_zone	America/New_York
+# The ratchet. Never lower it to make a build green — move the row to known_gap.
+min_blocking_pass_rate	1.0
+# Categories whose rows are regressions-not-allowed.
+blocking_categories	must_detect,must_not_detect,whitespace,unicode,boundary,idempotent
