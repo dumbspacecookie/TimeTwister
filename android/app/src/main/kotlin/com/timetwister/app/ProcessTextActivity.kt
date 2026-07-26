@@ -7,8 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
-import com.timetwister.core.TimeConverter
-import com.timetwister.core.TimeParser
 import kotlinx.coroutines.runBlocking
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -39,51 +37,43 @@ class ProcessTextActivity : Activity() {
 
         setResult(RESULT_CANCELED)
 
-        // "Select all" on a long document is one tap away from our menu entry, and the
-        // parser is a regex sweep over the whole string on the main thread. Refuse
-        // absurd inputs instead of stalling the UI thread of whatever app invoked us.
-        if (input.length > TimeParser.MAX_INPUT_CHARS) {
-            toast(getString(R.string.toast_selection_too_long), Toast.LENGTH_SHORT)
-            finish()
-            return
-        }
+        // Every branch is decided in ProcessTextDecision, which is pure and tested; this
+        // activity does nothing but carry the verdict out to the platform.
+        val decision = ProcessTextDecider.decide(
+            input = input,
+            readOnly = readOnly,
+            now = ZonedDateTime.now(),
+            targets = ::loadTargets,
+        )
 
-        val targets = loadTargets()
-        val detected = TimeParser.detectLast(input)
-        // One clock reading for every render below, so the stamp we show can't disagree with
-        // the stamp we copy across a midnight boundary.
-        val now = ZonedDateTime.now()
+        when (decision) {
+            ProcessTextDecision.TooLong ->
+                toast(getString(R.string.toast_selection_too_long), Toast.LENGTH_SHORT)
 
-        when {
-            detected == null ->
-                // Specific, not generic: the failure is almost always "the parser needs a
-                // disambiguator", so show what a parseable selection looks like.
+            // Specific, not generic: the failure is almost always "the parser needs a
+            // disambiguator", so show what a parseable selection looks like.
+            ProcessTextDecision.NoTimeFound ->
                 toast(getString(R.string.toast_no_time_found), Toast.LENGTH_LONG)
 
-            // The time the user wrote does not exist on the day it resolves to (the
-            // hour a spring-forward transition removes). renderStamp below would
-            // happily render the shifted time, so this has to be caught here rather
-            // than relied upon from splice — the read-only branch never calls splice
-            // for what it displays. Say so instead of failing silently.
-            TimeConverter.isUnrepresentable(detected, now) ->
+            is ProcessTextDecision.TimeDoesNotExist ->
                 toast(
-                    getString(R.string.toast_time_does_not_exist, detected.originalText),
+                    getString(R.string.toast_time_does_not_exist, decision.originalText),
                     Toast.LENGTH_LONG,
                 )
 
-            readOnly -> {
-                val stamp = TimeConverter.renderStamp(detected, targets, now)
-                // Clipboard gets the whole converted selection, not just the stamp: the user
-                // selected a sentence, so pasting back a sentence is what they meant. The
-                // Toast shows the stamp alone because that's the part they want to read now.
-                copyToClipboard(TimeConverter.splice(input, targets, now))
-                toast(getString(R.string.toast_readonly_copied, stamp), Toast.LENGTH_LONG)
+            is ProcessTextDecision.CopyToClipboard -> {
+                copyToClipboard(decision.text)
+                toast(
+                    getString(R.string.toast_readonly_copied, decision.stamp),
+                    Toast.LENGTH_LONG,
+                )
             }
 
-            else -> {
-                val out = TimeConverter.splice(input, targets, now)
-                setResult(RESULT_OK, Intent().putExtra(Intent.EXTRA_PROCESS_TEXT, out))
-            }
+            is ProcessTextDecision.Replace ->
+                setResult(
+                    RESULT_OK,
+                    Intent().putExtra(Intent.EXTRA_PROCESS_TEXT, decision.text),
+                )
         }
 
         finish()
