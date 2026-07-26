@@ -194,9 +194,23 @@ public enum TimeParser {
             }
     }
 
-    public static func detect(in text: String) -> [DetectedTime] {
+    /// - Parameter defaultZone: the zone to attribute a time to when the writer
+    ///   named none. Defaults to the device zone, which is what every production
+    ///   caller wants; it is a parameter so tests can pin it.
+    ///
+    ///   Kotlin reads `ZoneId.systemDefault()` here and its suite pins the JVM
+    ///   default around the test class instead. That trick does not port:
+    ///   `NSTimeZone.default` is honoured by Apple's Foundation but ignored by
+    ///   swift-corelibs, so on a Windows or Linux runner every zone-less row
+    ///   would silently be scored against whatever zone the machine happens to
+    ///   be in. An explicit seam is both more honest and less spooky than a
+    ///   global mutation, so it is the seam that got ported rather than the
+    ///   trick.
+    public static func detect(
+        in text: String,
+        defaultZone: TimeZone = .current
+    ) -> [DetectedTime] {
         let ns = text as NSString
-        let defaultZone = TimeZone.current
         let stamps = stampRanges(in: text)
         var out: [DetectedTime] = []
 
@@ -288,8 +302,11 @@ public enum TimeParser {
     }
 
     /// Returns only the last detected time — most useful when handling a user selection.
-    public static func detectLast(in text: String) -> DetectedTime? {
-        detect(in: text).last
+    public static func detectLast(
+        in text: String,
+        defaultZone: TimeZone = .current
+    ) -> DetectedTime? {
+        detect(in: text, defaultZone: defaultZone).last
     }
 
     /// If a stamp we rendered earlier sits immediately after `endExclusive`, returns

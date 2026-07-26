@@ -106,6 +106,32 @@ public enum TimeZoneAlias {
         // abbreviations are already alias tokens, so the output stays re-readable.
     ]
 
+    /// Standard/daylight abbreviations for the DST-observing zones this app
+    /// supports, so the label never has to be looked up in the platform's CLDR
+    /// tables.
+    ///
+    /// That lookup is not portable. Apple's Foundation answers
+    /// `abbreviation(for:)` with "CEST"; swift-corelibs on Windows has no
+    /// abbreviation for these zones at all and returns an offset-shaped stand-in,
+    /// so the same input rendered "3pm CEST" on a phone and "3pm UTC+2" on a CI
+    /// runner. Thirteen corpus rows disagreed across platforms for that reason
+    /// alone.
+    ///
+    /// Every spelling here is already an alias token in `map`, because these are
+    /// the abbreviations users write — which is also what keeps our own output
+    /// re-readable on a second pass. We know both halves of each pair already;
+    /// asking the platform for them bought nothing and cost portability.
+    ///
+    /// Zones in `regionLabels` are deliberately not here: their label is
+    /// DST-stable by design and must not flip.
+    private static let dstAbbreviations: [String: (standard: String, daylight: String)] = [
+        "Europe/Paris": ("CET", "CEST"),
+        "Europe/Helsinki": ("EET", "EEST"),
+        "Australia/Sydney": ("AEST", "AEDT"),
+        "Pacific/Auckland": ("NZST", "NZDT"),
+        "America/Anchorage": ("AKST", "AKDT"),
+    ]
+
     /// Lowercase, trim, and collapse any run of whitespace to a single space, so
     /// multi-word aliases match however the writer spaced them. The pattern
     /// accepts `\s+` between the words, and "central  european" (or one split
@@ -154,6 +180,12 @@ public enum TimeZoneAlias {
     public static func shortLabel(for tz: TimeZone, at date: Date? = nil) -> String {
         if let region = regionLabels[tz.identifier] { return region }
 
+        if let date, let pair = dstAbbreviations[tz.identifier] {
+            return tz.isDaylightSavingTime(for: date) ? pair.daylight : pair.standard
+        }
+
+        // Anything we don't carry a spelling for: take the platform's word for it
+        // when it has one, otherwise render the offset ourselves.
         if let date, let abbr = tz.abbreviation(for: date), isWordLabel(abbr) {
             return abbr
         }

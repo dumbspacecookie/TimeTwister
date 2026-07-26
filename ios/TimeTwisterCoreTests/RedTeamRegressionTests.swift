@@ -40,22 +40,31 @@ final class RedTeamRegressionTests: XCTestCase {
         return cal.date(from: comps)!
     }
 
-    private func splice(_ input: String) -> String {
-        TimeConverter.splice(input: input, targets: targets, now: now)
+    /// Pinned so the "writer named no zone" fallback is deterministic.
+    ///
+    /// Passed as an argument rather than installed with `NSTimeZone.default`:
+    /// that setter is honoured by Apple's Foundation and silently ignored by
+    /// swift-corelibs, so the Kotlin suite's trick of pinning the process default
+    /// looks like it works here and does not.
+    private var pinnedZone: TimeZone { et }
+
+    private func splice(_ input: String, at when: Date? = nil) -> String {
+        TimeConverter.splice(
+            input: input, targets: targets, now: when ?? now, defaultZone: pinnedZone
+        )
     }
 
-    // Pin the system zone so the "no explicit zone" fallback is deterministic.
-    private static var savedZone: TimeZone?
-
-    override class func setUp() {
-        super.setUp()
-        savedZone = NSTimeZone.default
-        NSTimeZone.default = TimeZone(identifier: "America/New_York")!
+    private func maybeSplice(
+        _ input: String, readOnly: Bool = false, at when: Date? = nil
+    ) -> String? {
+        TimeConverter.maybeSplice(
+            input: input, targets: targets, readOnly: readOnly,
+            now: when ?? now, defaultZone: pinnedZone
+        )
     }
 
-    override class func tearDown() {
-        if let savedZone { NSTimeZone.default = savedZone }
-        super.tearDown()
+    private func detectLast(_ input: String) -> DetectedTime? {
+        TimeParser.detectLast(in: input, defaultZone: pinnedZone)
     }
 
     // MARK: - RT-01
@@ -78,9 +87,7 @@ final class RedTeamRegressionTests: XCTestCase {
     /// The same guarantee stated the way a host actually consumes it.
     func testMaybeSpliceReportsNoChangeOnAlreadyStampedText() {
         let once = splice("lets do 5pm CT")
-        XCTAssertNil(TimeConverter.maybeSplice(
-            input: once, targets: targets, readOnly: false, now: now
-        ))
+        XCTAssertNil(maybeSplice(once))
     }
 
     // MARK: - RT-02
@@ -124,7 +131,7 @@ final class RedTeamRegressionTests: XCTestCase {
             "5pm  CT",
         ]
         for input in inputs {
-            guard let detected = TimeParser.detectLast(in: input) else {
+            guard let detected = detectLast(input) else {
                 return XCTFail("no detection for: \(input.debugDescription)")
             }
             XCTAssertTrue(detected.hadExplicitZone,
@@ -145,7 +152,7 @@ final class RedTeamRegressionTests: XCTestCase {
                        "call me at 5pm ET (4pm CT · 2pm PT)")
         XCTAssertEqual(splice("lets do 5pm EST/EDT"),
                        "lets do 5pm ET (4pm CT · 2pm PT)")
-        XCTAssertEqual(TimeParser.detectLast(in: "3pm Central European Time")?.timeZone.identifier,
+        XCTAssertEqual(detectLast("3pm Central European Time")?.timeZone.identifier,
                        TimeZone(identifier: "Europe/Paris")?.identifier,
                        "central european must not resolve to US Central")
     }
@@ -198,68 +205,40 @@ final class RedTeamRegressionTests: XCTestCase {
         // so "2:30am" resolves onto that same day and lands in the hole.
         let springForward = Self.date(utc: (2026, 3, 8, 5, 30))
         let input = "deploy at 2:30am ET"
-        XCTAssertEqual(
-            TimeConverter.splice(input: input, targets: targets, now: springForward),
-            input
-        )
-        XCTAssertNil(TimeConverter.maybeSplice(
-            input: input, targets: targets, readOnly: false, now: springForward
-        ))
+        XCTAssertEqual(splice(input, at: springForward), input)
+        XCTAssertNil(maybeSplice(input, at: springForward))
     }
 
     // MARK: - RT-12
     // Was: Australia/Sydney rendered "AEST" in January (it is on AEDT) and Paris
     // rendered "CET" all summer. The number was right, the label contradicted it.
 
-    /// Accepts either the conventional abbreviation or our own offset form,
-    /// because the two are not equally available everywhere.
+    /// Asserted exactly, on every platform, because these spellings are ours.
     ///
-    /// swift-corelibs-Foundation on Windows has no abbreviation for these zones
-    /// and answers `abbreviation(for:)` with an offset-shaped stand-in, which
-    /// `shortLabel` deliberately rejects and replaces with "UTC+11". Apple's
-    /// Foundation has the full CLDR table and answers "AEDT". Both are correct
-    /// and both track the instant — the iOS build a user installs gets the nicer
-    /// of the two.
-    ///
-    /// This is the one part of the label contract a non-Mac runner cannot check
-    /// exactly, so what is asserted here is what actually matters: the label
-    /// names the offset that is really in force, and it changes across a DST
-    /// boundary rather than being pinned to one half of the year.
+    /// They were briefly written as "the abbreviation OR our offset form", when
+    /// the label still came from `TimeZone.abbreviation(for:)` — Apple's
+    /// Foundation answers "AEDT", swift-corelibs on Windows has no entry and
+    /// answers an offset-shaped stand-in. `TimeZoneAlias` now carries the
+    /// standard/daylight pair for every DST-observing zone the app supports and
+    /// picks between them with `isDaylightSavingTime(for:)`, so the output is
+    /// identical everywhere and the assertion can be exact again.
     func testDstSpecificLabelsFollowTheInstant() throws {
         let january = Self.date(utc: (2026, 1, 15, 13, 0))
         let july = Self.date(utc: (2026, 7, 15, 13, 0))
 
         let cases: [(id: String, winter: String, summer: String)] = [
-            ("Australia/Sydney", "AEDT", "AEST"),
+            ("Australia/Sydney", "AEDT", "AEST"),   // southern hemisphere: inverted
+            ("Pacific/Auckland", "NZDT", "NZST"),
             ("Europe/Paris", "CET", "CEST"),
+            ("Europe/Helsinki", "EET", "EEST"),
+            ("America/Anchorage", "AKST", "AKDT"),
         ]
 
         for c in cases {
             let tz = try XCTUnwrap(TimeZone(identifier: c.id))
-            let winter = TimeZoneAlias.shortLabel(for: tz, at: january)
-            let summer = TimeZoneAlias.shortLabel(for: tz, at: july)
-
-            XCTAssertTrue(
-                [c.winter, offsetForm(tz, at: january)].contains(winter),
-                "\(c.id) in January: expected \(c.winter) or \(offsetForm(tz, at: january)), got \(winter)"
-            )
-            XCTAssertTrue(
-                [c.summer, offsetForm(tz, at: july)].contains(summer),
-                "\(c.id) in July: expected \(c.summer) or \(offsetForm(tz, at: july)), got \(summer)"
-            )
-            XCTAssertNotEqual(winter, summer, "\(c.id) label must not be pinned to one season")
+            XCTAssertEqual(TimeZoneAlias.shortLabel(for: tz, at: january), c.winter, c.id)
+            XCTAssertEqual(TimeZoneAlias.shortLabel(for: tz, at: july), c.summer, c.id)
         }
-    }
-
-    /// The "UTC±h[:mm]" rendering `shortLabel` falls back to, recomputed here
-    /// independently so the test is not just echoing the implementation.
-    private func offsetForm(_ tz: TimeZone, at date: Date) -> String {
-        let minutes = tz.secondsFromGMT(for: date) / 60
-        if minutes == 0 { return "UTC" }
-        let sign = minutes < 0 ? "-" : "+"
-        let h = abs(minutes) / 60
-        let m = abs(minutes) % 60
-        return m == 0 ? "UTC\(sign)\(h)" : "UTC\(sign)\(h):\(m < 10 ? "0" : "")\(m)"
     }
 
     // MARK: - G014-G017
@@ -284,8 +263,7 @@ final class RedTeamRegressionTests: XCTestCase {
     // boundary between "T" and "で".
 
     func testNonLatinTextTouchingTheZoneTokenKeepsTheZone() {
-        XCTAssertEqual(TimeParser.detectLast(in: "5pm CTです")?.timeZone.identifier,
-                       ct.identifier)
+        XCTAssertEqual(detectLast("5pm CTです")?.timeZone.identifier, ct.identifier)
         XCTAssertEqual(splice("5pm CTです"), "5pm CT (6pm ET · 3pm PT)です")
     }
 
@@ -299,14 +277,7 @@ final class RedTeamRegressionTests: XCTestCase {
     // The iOS Action Extension can be handed a selection it may not rewrite.
 
     func testReadOnlySelectionsAreNeverRewritten() {
-        XCTAssertNil(TimeConverter.maybeSplice(
-            input: "lets do 5pm CT", targets: targets, readOnly: true, now: now
-        ))
-        XCTAssertEqual(
-            TimeConverter.maybeSplice(
-                input: "lets do 5pm CT", targets: targets, readOnly: false, now: now
-            ),
-            "lets do 5pm CT (6pm ET · 3pm PT)"
-        )
+        XCTAssertNil(maybeSplice("lets do 5pm CT", readOnly: true))
+        XCTAssertEqual(maybeSplice("lets do 5pm CT"), "lets do 5pm CT (6pm ET · 3pm PT)")
     }
 }

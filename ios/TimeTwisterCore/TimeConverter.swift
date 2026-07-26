@@ -73,9 +73,12 @@ public enum TimeConverter {
     public static func splice(
         input: String,
         targets: [TimeZone],
-        now: Date = Date()
+        now: Date = Date(),
+        defaultZone: TimeZone = .current
     ) -> String {
-        guard let detected = TimeParser.detectLast(in: input) else { return input }
+        guard let detected = TimeParser.detectLast(in: input, defaultZone: defaultZone) else {
+            return input
+        }
         if isUnrepresentable(detected, now: now) { return input }
 
         let stamp = renderStamp(for: detected, targets: targets, now: now)
@@ -112,12 +115,15 @@ public enum TimeConverter {
         input: String,
         targets: [TimeZone],
         readOnly: Bool,
-        now: Date = Date()
+        now: Date = Date(),
+        defaultZone: TimeZone = .current
     ) -> String? {
         if readOnly { return nil }
-        guard let detected = TimeParser.detectLast(in: input) else { return nil }
+        guard let detected = TimeParser.detectLast(in: input, defaultZone: defaultZone) else {
+            return nil
+        }
         if isUnrepresentable(detected, now: now) { return nil }
-        let spliced = splice(input: input, targets: targets, now: now)
+        let spliced = splice(input: input, targets: targets, now: now, defaultZone: defaultZone)
         // Already-stamped text splices back to itself; report "no change" so the
         // host can skip the edit entirely.
         return spliced == input ? nil : spliced

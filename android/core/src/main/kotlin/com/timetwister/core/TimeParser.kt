@@ -42,7 +42,7 @@ object TimeParser {
      * wrong zone AND a dangling " European Time" left in the message.
      */
     private const val TZ_TOKENS = """
-              central\s+european | eastern\s+european
+              central$SP+european | eastern$SP+european
             | et|est|edt|ct|cst|cdt|mt|mst|mdt|pt|pst|pdt|akst|akdt|hst
             | utc|gmt|bst|cet|cest|eet|eest|uk|cn
             | ist|jst|kst|sgt|hkt|aest|aedt|nzst|nzdt

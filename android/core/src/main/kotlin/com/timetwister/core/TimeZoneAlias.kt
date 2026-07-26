@@ -101,6 +101,36 @@ object TimeZoneAlias {
         // abbreviations are already alias tokens, so the output stays re-readable.
     )
 
+    /**
+     * Standard/daylight abbreviations for the DST-observing zones this app
+     * supports, so the label never depends on the platform's CLDR tables.
+     *
+     * That lookup is not portable, and the divergence is not hypothetical: the
+     * Swift core asked Foundation for these and got "CEST" on iOS and an
+     * offset-shaped stand-in on a Windows CI runner, so thirteen corpus rows
+     * rendered differently on the two platforms. The same exposure exists here —
+     * this corpus is scored on a desktop JVM, but the app runs on Android, whose
+     * `zzz` resolution goes through ICU and is free to answer "GMT+02:00". If it
+     * ever did, the label would silently degrade to an offset on device while
+     * every test on every developer's machine stayed green.
+     *
+     * Every spelling here is already an alias token in [map], because these are
+     * the abbreviations users write — which is also what keeps our own output
+     * re-readable on a second pass. We know both halves of each pair already;
+     * asking the platform for them buys nothing and costs portability.
+     *
+     * Zones in [REGION_LABELS] are deliberately absent: their label is DST-stable
+     * by design and must not flip.
+     */
+    private val DST_ABBREVIATIONS: Map<String, Pair<String, String>> = mapOf(
+        // id to (standard, daylight)
+        "Europe/Paris" to ("CET" to "CEST"),
+        "Europe/Helsinki" to ("EET" to "EEST"),
+        "Australia/Sydney" to ("AEST" to "AEDT"),
+        "Pacific/Auckland" to ("NZST" to "NZDT"),
+        "America/Anchorage" to ("AKST" to "AKDT"),
+    )
+
     private val abbreviation = DateTimeFormatter.ofPattern("zzz", Locale.US)
 
     /**
@@ -142,9 +172,14 @@ object TimeZoneAlias {
         REGION_LABELS[zone.id]?.let { return it }
 
         if (at != null) {
+            DST_ABBREVIATIONS[zone.id]?.let { (standard, daylight) ->
+                return if (zone.rules.isDaylightSavings(at.toInstant())) daylight else standard
+            }
+
+            // Anything we don't carry a spelling for: take the platform's word for
+            // it when it has one. java.time falls back to "GMT+11:00" style output
+            // when it does not; prefer our own offset rendering in that case.
             val abbr = abbreviation.format(at.withZoneSameInstant(zone))
-            // java.time falls back to "GMT+11:00" style output when it has no
-            // abbreviation; prefer our own offset rendering in that case.
             if (abbr.isNotEmpty() && !abbr.startsWith("GMT") && !abbr.startsWith("UTC")) return abbr
         }
 
