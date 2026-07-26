@@ -26,8 +26,8 @@ and the iOS pipeline has never gone green.
 
 | | State |
 |---|---|
-| Shared Kotlin core | 236-row graded corpus, blocking gate 100%, overall 99.15% (one deliberate open gap); 9 invariants over 500 seeded cases each |
-| Shared Swift core | Same corpus, same gate, same red-team suite, 3 of the 9 invariants. Builds and tests without a Mac. **Not fully at parity** — see below |
+| Shared Kotlin core | 263-row graded corpus, blocking gate 100%, overall 98.10% (four deliberate open gaps); 9 invariants over 500 seeded cases each; perf guarded |
+| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. One known divergence left — the ICU vs Java word boundary |
 | Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below) |
 | Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested |
 | iOS app | Core is verified; the app, keyboard and share extension still need a Mac |
@@ -136,14 +136,15 @@ is left.
 
 **Correctness / robustness**
 
-- [ ] **The parser is O(n²) and only Android caps its input.** Two full-string
-      copies run once per match (`TimeParser` unknown-zone lookahead and
-      `stampRanges`). Measured: 200 KB of stamped text takes 34 s. Android caps
-      at 5000 chars before parsing and is safe; the **iOS Action Extension, the
-      iOS keyboard (main thread, every keystroke) and the desktop tray are all
-      uncapped**. An extension that blocks for tens of seconds is watchdog-killed.
-      Two independent fixes: port `MAX_INPUT_CHARS`, and pass explicit ranges to
-      the regex instead of materialising substrings (makes both paths linear).
+- [x] ~~**The parser is O(n²) and only Android caps its input.**~~ **Fixed
+      2026-07-26.** There were *three* quadratic paths, not the two the review
+      found — the third was `stamps.any { … }`, O(stamps) per match, which the JVM
+      absorbed well enough to hide (307 ms) and Swift did not (10.6 s). A moving
+      index replaces it. 200 KB of stamped text: **34,123 ms → 48 ms** on Kotlin,
+      189 ms on Swift. `PerformanceTest`/`PerformanceTests` guard both cores with
+      absolute budgets ~25× the measured time. `MAX_INPUT_CHARS` moved into
+      `TimeParser` and is now applied by the iOS extension, the desktop tray and
+      Android; the keyboard clamps its context window to 512 characters.
 - [ ] **Autumn fall-back is unhandled on both cores.** An ambiguous wall clock
       (1:30am ET on 2026-11-01 happens twice) silently resolves to the earlier
       instant, with no marker and no refusal. `isUnrepresentable` structurally
@@ -154,31 +155,35 @@ is left.
       characters. The `isNumber`/`isDigit` half of this divergence is fixed; this
       half is not.
 - [ ] `5pm ET/PT` leaves `/PT` dangling — `tzPair` lists only DST-pair
-      abbreviations, not the bare region tokens.
+      abbreviations, not the bare region tokens. Left unfixed on purpose: absorbing
+      the second token would silently drop a zone the writer named, and declining
+      would pre-empt A003. Recorded as corpus row `G108` instead.
 
-**Eval integrity** — the gate works (proved by mutation on both cores) but is
-defensible in only one direction:
+**Eval integrity** — the gate works (proved by mutation on both cores) and, as of
+2026-07-26, is defensible in both directions:
 
-- [ ] `ratio(n, 0)` returns 1.0, so **a corpus that loaded zero blocking rows
-      passes**. In Swift both eval tests share the `XCTSkip` path, so one missing
-      file disarms the guard and the gate together.
-- [ ] The ratchet is bypassable without touching the constant: recategorise a row
-      to `ambiguous`, delete it (94 of 236 can go — the only floor is `>= 120`),
-      or edit `expect_output` to match new behaviour. A pinned row count, pinned
-      per-category counts, and `assert blocking.falsePositives == 0` would each
-      close a route.
-- [ ] Three of the four defects in §5 still have **no corpus row**, and
-      `half past 5 ET` is encoded as `must_not_detect`, blocking, passing — a
-      defect this file calls open is ratchet-protected as correct (D7).
-- [ ] Harness config (`blockingCategories`, the ratchet, the clock, the targets)
-      is duplicated per core with nothing asserting the copies agree.
-- [ ] Swift is missing 6 of the 9 invariants: `source-label-first`,
-      `distinct-targets`, `round-trip`, `whitespace-stable`,
-      `no-detect-identity`, `never-throws`.
+- [x] ~~`ratio(n, 0)` returns 1.0, so a zero-row corpus passes.~~ Checked
+      explicitly now, before the rate. On the Swift side the `XCTSkip` path used
+      to disarm the guard and the gate together; it fails instead of skipping
+      whenever it is demonstrably in a source checkout. Verified by hiding the
+      corpus: three failures, no skips.
+- [x] ~~The ratchet is bypassable without touching the constant.~~ Composition is
+      pinned per category on both cores, the blocking set is pinned, and
+      `falsePositives == 0` is an independent floor. Verified by deleting a row —
+      both cores caught it; before the change the gate stayed at 100%.
+- [x] ~~Harness config is duplicated per core with nothing asserting the copies
+      agree.~~ `eval/config.tsv` is now the shared source and both harnesses
+      assert against it. Verified by desyncing the clock: both fail.
+- [x] ~~Swift is missing 6 of the 9 invariants.~~ All nine ported, exploring the
+      same 500 inputs as Kotlin for the same seed.
+- [x] ~~Three of the four §5 defects have no corpus row.~~ Two are fixed; the
+      rest are `known_gap` rows (G105–G108). **Overall precision now reads 99.35%,
+      not 100%** — the score says what is missing again, and OPEN ITEMS prints.
 - [ ] `android/app` has **no `src/test` and no `androidTest`** — CI's
       `:app:testDebugUnitTest` passes vacuously. CI never runs `swift test`
       either. Cheapest first test: `UserPreferences.decode/encode`, where
-      `defaults.size <= MAX_RECOMMENDED_ZONES` **fails today** outside the US.
+      `defaults.size <= MAX_RECOMMENDED_ZONES` is reported to **fail today**
+      outside the US (agent-reported, not yet verified by hand).
 
 **Security / privacy** (nothing critical; full details in the review)
 
@@ -216,9 +221,19 @@ Confirmed still-open behaviour, all verifiable locally on both cores now, all
 drop into the existing corpus + regression suites:
 
 - [ ] **Ranges** — `3-5pm ET` converts only the last endpoint, so the stamp reads as
-      if a two-hour window maps to a single time. *(Blocked on A001 below.)*
-- [ ] **`5.30pm`** — a dot is not accepted as a minute separator; silently does nothing
-- [ ] **`1700 UTC`** — no military-time support at all
+      if a two-hour window maps to a single time. *(Blocked on A001 — it is a
+      question about what the output should even look like, and guessing would be
+      worse than leaving it red. Now visible as corpus row `G107`.)*
+- [x] ~~**`5.30pm`**~~ **Fixed 2026-07-26.** A dot counts as a minute separator
+      only when am/pm confirms it — accept it unconditionally and "3.50 pt"
+      becomes a time, walking the whole false-positive class back in through a
+      side door.
+- [x] ~~**`1700 UTC`**~~ **Fixed 2026-07-26**, with a restriction found by probing
+      rather than reasoning: the zone must be **3+ characters**. With two-letter
+      zones accepted, "we ran 1200 CT scans" was rewritten mid-sentence — and the
+      worse collisions are units, "1500 MT" (metric tons) and "2000 PT"
+      (physical-therapy sessions). The cost is `1700 ET`, a genuine usage, logged
+      as `G106` rather than pretended away.
 - [x] ~~**`half past 5`** — silently does nothing~~ **Resolved 2026-07-25, and the
       item was aimed at the wrong input.** `half past 5 ET` is *correctly* declined:
       it has no am/pm, so it fails the disambiguator exactly like a bare `5 ET`, and
