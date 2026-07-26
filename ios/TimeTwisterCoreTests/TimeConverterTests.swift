@@ -102,9 +102,17 @@ final class TimeConverterTests: XCTestCase {
 
     func testParserLowercaseTzToken() {
         // regex is case-insensitive; "utc" lowercase should resolve to UTC.
+        //
+        // Asserted by offset and rendered label, not by identifier string:
+        // Foundation treats "UTC" and "GMT" as aliases and canonicalises one to
+        // the other, and which name survives differs between Apple's Foundation
+        // and swift-corelibs. Both of those are UTC as far as this app is
+        // concerned, and the label is what the user actually sees.
         let detected = TimeParser.detect(in: "ship by 11pm utc")
         XCTAssertEqual(detected.first?.hour, 23)
-        XCTAssertEqual(detected.first?.timeZone.identifier, "UTC")
+        let zone = try? XCTUnwrap(detected.first?.timeZone)
+        XCTAssertEqual(zone?.secondsFromGMT(for: Date()), 0)
+        XCTAssertEqual(zone.map { TimeZoneAlias.shortLabel(for: $0) }, "UTC")
     }
 
     func testParserUppercaseAmPm() {

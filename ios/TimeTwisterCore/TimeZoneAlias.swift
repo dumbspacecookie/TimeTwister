@@ -43,10 +43,16 @@ public enum TimeZoneAlias {
         "gmt": "UTC",
         "bst": "Europe/London",
         "london": "Europe/London",
+        // "uk" and "cn" are here because we RENDER them as labels. Every label we
+        // emit has to parse back to the zone it came from, or a second pass reads
+        // its own output as an unzoned time and stamps it again.
+        "uk": "Europe/London",
         "cet": "Europe/Paris",
         "cest": "Europe/Paris",
+        "central european": "Europe/Paris",
         "eet": "Europe/Helsinki",
         "eest": "Europe/Helsinki",
+        "eastern european": "Europe/Helsinki",
 
         // Asia / Pacific
         "ist": "Asia/Kolkata",
@@ -58,6 +64,7 @@ public enum TimeZoneAlias {
         "singapore": "Asia/Singapore",
         "hkt": "Asia/Hong_Kong",
         "cst_china": "Asia/Shanghai", // intentional disambiguation; "CST" alone stays US Central
+        "cn": "Asia/Shanghai",
         "aest": "Australia/Sydney",
         "aedt": "Australia/Sydney",
         "sydney": "Australia/Sydney",
@@ -65,43 +72,118 @@ public enum TimeZoneAlias {
         "nzdt": "Pacific/Auckland",
     ]
 
+    /// Labels that are correct all year because they name a *region*, not an
+    /// offset. "ET" is right whether New York is on EST or EDT — which is exactly
+    /// why the US entries are hardcoded rather than derived.
+    ///
+    /// Zones whose conventional abbreviation is DST-specific are deliberately
+    /// absent (Europe/Paris, Europe/Helsinki, Australia/Sydney): a fixed "CET" or
+    /// "AEST" label contradicts the actual offset for half the year, and a reader
+    /// who trusts the abbreviation and re-derives the time lands an hour off.
+    /// Those are resolved against the instant instead, in `shortLabel`.
+    ///
+    /// Both "UTC" and "GMT" appear as keys on purpose. `TimeZone(identifier:)`
+    /// canonicalises one to the other, and *which way* it goes differs between
+    /// Apple's Foundation and swift-corelibs. Keying on both makes the label
+    /// stable regardless of which name the platform hands back.
+    private static let regionLabels: [String: String] = [
+        "America/New_York": "ET",
+        "America/Chicago": "CT",
+        "America/Denver": "MT",
+        "America/Los_Angeles": "PT",
+        "Pacific/Honolulu": "HST", // no DST here, so the abbreviation is safe year-round
+        "UTC": "UTC",
+        "GMT": "UTC",
+        "Europe/London": "UK",
+        "Asia/Kolkata": "IST",
+        "Asia/Tokyo": "JST",
+        "Asia/Seoul": "KST",
+        "Asia/Singapore": "SGT",
+        "Asia/Hong_Kong": "HKT",
+        "Asia/Shanghai": "CN",
+        // America/Anchorage and Pacific/Auckland are resolved against the instant
+        // (AKST/AKDT, NZST/NZDT) rather than pinned: both observe DST, and both
+        // abbreviations are already alias tokens, so the output stays re-readable.
+    ]
+
+    /// Lowercase, trim, and collapse any run of whitespace to a single space, so
+    /// multi-word aliases match however the writer spaced them. The pattern
+    /// accepts `\s+` between the words, and "central  european" (or one split
+    /// across a line break) has to land on the same key as "central european".
+    private static func normalise(_ raw: String) -> String {
+        raw.lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    /// True when `raw` is a zone token this app actually understands.
+    ///
+    /// Distinct from `resolve`, which also accepts anything Foundation
+    /// recognises — including legacy identifiers like "NZ" and "EST5EDT".
+    /// Callers asking "did the writer name a zone I support?" need this stricter
+    /// answer, or an unsupported token looks supported and the time gets
+    /// relabelled with the system zone.
+    public static func isKnownToken(_ raw: String) -> Bool {
+        map[normalise(raw)] != nil
+    }
+
     /// Resolve a user-written TZ token (case-insensitive) to a Foundation `TimeZone`.
     public static func resolve(_ raw: String) -> TimeZone? {
-        let key = raw.lowercased().trimmingCharacters(in: .whitespaces)
-        if let iana = map[key], let tz = TimeZone(identifier: iana) {
+        if let iana = map[normalise(raw)], let tz = TimeZone(identifier: iana) {
             return tz
         }
-        // Fallbacks: try Foundation's own abbreviation and identifier lookups.
-        if let tz = TimeZone(abbreviation: raw.uppercased()) { return tz }
-        if let tz = TimeZone(identifier: raw) { return tz }
-        return nil
+        // Fallback: Foundation knows some identifiers we don't list.
+        //
+        // `TimeZone(abbreviation:)` is deliberately NOT in this chain. It accepts
+        // arbitrary three-letter strings and hands back a *fixed-offset* zone, so
+        // an unsupported token would resolve to something plausible-looking that
+        // ignores DST — silently wrong by an hour for half the year, which is the
+        // failure mode this whole file exists to avoid.
+        return TimeZone(identifier: raw)
     }
 
     /// A stable short label we render to users (e.g. "ET", "PT", "UTC").
-    /// Uses the "first alias that maps to this IANA id" heuristic.
-    public static func shortLabel(for tz: TimeZone) -> String {
-        let iana = tz.identifier
-        switch iana {
-        case "America/New_York": return "ET"
-        case "America/Chicago": return "CT"
-        case "America/Denver": return "MT"
-        case "America/Los_Angeles": return "PT"
-        case "America/Anchorage": return "AK"
-        case "Pacific/Honolulu": return "HI"
-        case "UTC": return "UTC"
-        case "Europe/London": return "UK"
-        case "Europe/Paris": return "CET"
-        case "Europe/Helsinki": return "EET"
-        case "Asia/Kolkata": return "IST"
-        case "Asia/Tokyo": return "JST"
-        case "Asia/Seoul": return "KST"
-        case "Asia/Singapore": return "SGT"
-        case "Asia/Hong_Kong": return "HKT"
-        case "Asia/Shanghai": return "CN"
-        case "Australia/Sydney": return "AEST"
-        case "Pacific/Auckland": return "NZ"
-        default:
-            return tz.abbreviation() ?? iana
+    ///
+    /// `at` is the instant being rendered. When supplied, zones outside
+    /// `regionLabels` are labelled with the abbreviation actually in force at that
+    /// instant ("CEST" in July, "CET" in January). When it is absent we fall back
+    /// to a plain UTC offset rather than the raw IANA id — dumping
+    /// "5pm America/Toronto" into a chat message is not something anyone wants to
+    /// send, and every Canadian, Berliner, Dubliner and Australian outside the
+    /// hardcoded list used to get exactly that.
+    public static func shortLabel(for tz: TimeZone, at date: Date? = nil) -> String {
+        if let region = regionLabels[tz.identifier] { return region }
+
+        if let date, let abbr = tz.abbreviation(for: date), isWordLabel(abbr) {
+            return abbr
         }
+
+        return offsetLabel(tz, at: date)
+    }
+
+    /// True for a real word-shaped abbreviation ("CEST", "AEDT", "NZDT") and
+    /// false for every offset-shaped stand-in Foundation produces when it has no
+    /// abbreviation to give.
+    ///
+    /// Those stand-ins are not written the same way everywhere: Apple's
+    /// Foundation and `java.time` say "GMT+05:45", swift-corelibs can say
+    /// "+0545". Rejecting on *shape* — letters only — catches all of them,
+    /// including whatever a future platform invents, and hands the label to
+    /// `offsetLabel` so there is one offset rendering instead of three.
+    private static func isWordLabel(_ s: String) -> Bool {
+        !s.isEmpty && s.allSatisfy { $0.isLetter } && s != "GMT" && s != "UTC"
+    }
+
+    /// "UTC+5:30" / "UTC-4" — always meaningful, never a raw IANA id.
+    private static func offsetLabel(_ tz: TimeZone, at date: Date?) -> String {
+        let seconds = tz.secondsFromGMT(for: date ?? Date())
+        if seconds == 0 { return "UTC" }
+        let totalMinutes = seconds / 60
+        let sign = totalMinutes < 0 ? "-" : "+"
+        let hours = abs(totalMinutes) / 60
+        let minutes = abs(totalMinutes) % 60
+        if minutes == 0 { return "UTC\(sign)\(hours)" }
+        let mm = minutes < 10 ? "0\(minutes)" : "\(minutes)"
+        return "UTC\(sign)\(hours):\(mm)"
     }
 }
