@@ -48,11 +48,12 @@ object TimeParser {
      * it re-attributes the time to the system zone and renders it with full
      * confidence, which is the worst failure mode this tool has.
      */
-    private const val SP = """[\x20\t\r\n\xA0\x{202F}\x{2007}\x{2009}]"""
+    private const val SP = """[\x20\t\r\n\x0B\x0C\xA0\x{202F}\x{2007}\x{2009}]"""
 
     /** The same set as [SP], for the hand-written scans that don't go through a regex. */
     private val SPACE_CHARS = charArrayOf(
-        '\u0020', '\u0009', '\u000D', '\u000A', '\u00A0', '\u202F', '\u2007', '\u2009',
+        '\u0020', '\u0009', '\u000D', '\u000A', '\u000B', '\u000C',
+        '\u00A0', '\u202F', '\u2007', '\u2009',
     )
 
     /**
@@ -91,7 +92,7 @@ object TimeParser {
     private val ZONE_SUFFIX_WORDS = setOf("time", "standard", "daylight", "summer", "european")
 
     private const val TZ_TOKENS = """
-              (?:utc|gmt) [+-] \d{1,2} (?: :? \d{2} )?
+              (?:utc|gmt) [+-] [0-9]{1,2} (?: :? [0-9]{2} )?
             | central$SP+european | eastern$SP+european
             | et|est|edt|ct|cst|cdt|mt|mst|mdt|pt|pst|pdt|akst|akdt|hst
             | utc|gmt|bst|cet|cest|eet|eest|uk|cn
@@ -118,7 +119,19 @@ object TimeParser {
     // of ignored, and the pattern silently matches nothing at all.
     private val pattern: Regex = Regex(
         "(?xi)" + """
-        \b
+        # Not \b — an explicit lookbehind, for the same reason the trailing guard
+        # below is not \b either. Java's \b is built from isLetterOrDigit; ICU's
+        # word set also includes \p{Alphabetic} and all of \p{M}, and ICU refuses a
+        # boundary outright when the character at the position is Grapheme_Extend
+        # or Format. A differential run over both cores found 285 inputs where the
+        # two disagreed on nothing but this, and one of them mattered a great deal:
+        # "meet 5pm MSK<ZWJ>" declined here and converted on iOS, with the time
+        # relabelled to the device zone — the writer typed MSK and the message
+        # would have gone out saying ET.
+        #
+        # What we actually need is "not running out of an ASCII word", which is
+        # what this says and what both engines then agree on.
+        (?-i: (?<! [A-Za-z0-9_] ) )
         (?:
             # "12 noon" and "12 midnight" are written often enough to matter, and
             # the 12 has to be part of the match — otherwise it is left stranded in
@@ -130,13 +143,13 @@ object TimeParser {
             # afterwards, so "2500" and "1899" simply are not this shape. Listed
             # before the general hour branch so four digits win over two.
             # A zone is REQUIRED for this form — see the check in detect().
-            (?<mil>(?:[01]\d|2[0-3])[0-5]\d)
+            (?<mil>(?:[01][0-9]|2[0-3])[0-5][0-9])
           |
-            (?<hour>\d{1,2})
+            (?<hour>[0-9]{1,2})
             # A dot is accepted as a minute separator, but only conditionally —
             # see the sep check in detect(). "5.30pm" is how a lot of the world
             # writes half past five; "3.50 pt" is a measurement.
-            (?: (?<sep>[:.]) (?<minute>\d{2}) )?
+            (?: (?<sep>[:.]) (?<minute>[0-9]{2}) )?
             (?: $SP* (?<ampm>am|pm|a\.m\.|p\.m\.) )?
         )
         (?:
@@ -160,7 +173,7 @@ object TimeParser {
         # the T and the で — the zone was dropped and the time silently relabelled to
         # the system zone. All we actually need is that the token isn't running into
         # more ASCII word characters ("CTX" must not match "CT").
-        (?! [A-Za-z0-9] )
+        (?-i: (?! [A-Za-z0-9] ) )
         """.trimIndent()
     )
 
@@ -175,7 +188,7 @@ object TimeParser {
      * double-tap away.
      */
     private const val STAMP_PART =
-        """\d{1,2}(?::\d{2})?(?:am|pm)[ ]+[A-Za-z][A-Za-z0-9+:/_-]*(?:[ ]+[+-]\d+d)?"""
+        """[0-9]{1,2}(?::[0-9]{2})?(?:am|pm)[ ]+[A-Za-z][A-Za-z0-9+:/_-]*(?:[ ]+[+-][0-9]+d)?"""
 
     internal val STAMP: Regex = Regex(
         """\((?:$STAMP_PART)(?:[ ]*·[ ]*(?:$STAMP_PART))*\)""",
@@ -213,7 +226,7 @@ object TimeParser {
      * row, not an oversight.
      */
     private val TRAILING_ZONE_TOKEN: Pattern =
-        Pattern.compile("""^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b""")
+        Pattern.compile("""^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})(?![A-Za-z0-9])""")
 
     /**
      * A relative-time phrase immediately before the match — "half past 5pm",
@@ -235,8 +248,8 @@ object TimeParser {
      * ambiguous between a range and a relative time, so declining both is right.
      */
     private val RELATIVE_TIME_PREFIX = Regex(
-        """(?i)\b(?:half|quarter|five|ten|twenty|twenty[-\x20]?five|\d{1,2})""" +
-            """$SP+(?:past|to|after|till|til)$SP*$""",
+        """(?i)\b(?:half|quarter|five|ten|twenty|twenty[-\x20]?five|[0-9]{1,2})""" +
+            """$SP+(?:past|to|after|till|til)$SP*\z""",
     )
 
     /** Longest phrase RELATIVE_TIME_PREFIX can match ("twenty-five after " = 18). */
@@ -259,7 +272,7 @@ object TimeParser {
      * before the bracket keeps us from ignoring text we have never touched.
      */
     private val TIME_BEFORE_STAMP: Pattern = Pattern.compile(
-        """\d{1,2}(?::\d{2})?(?:am|pm)$SP+[A-Za-z][A-Za-z0-9+:/_-]*$SP*$""",
+        """[0-9]{1,2}(?::[0-9]{2})?(?:am|pm)$SP+[A-Za-z][A-Za-z0-9+:/_-]*$SP*\z""",
         Pattern.CASE_INSENSITIVE,
     )
 

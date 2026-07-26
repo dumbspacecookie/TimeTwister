@@ -145,7 +145,7 @@ public enum TimeZoneAlias {
     /// with a famous abbreviation says "UTC+2", and until now that was a guaranteed
     /// garble on the first pass.
     private static let offsetToken = try! NSRegularExpression(
-        pattern: #"^(?:utc|gmt)([+-])(\d{1,2})(?::?(\d{2}))?$"#
+        pattern: #"^(?:utc|gmt)([+-])([0-9]{1,2})(?::?([0-9]{2}))?$"#
     )
 
     /// Lowercase, trim, and collapse any run of whitespace to a single space, so

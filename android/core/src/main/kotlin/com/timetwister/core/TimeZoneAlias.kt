@@ -143,7 +143,7 @@ object TimeZoneAlias {
      * regions with a famous abbreviation says "UTC+2", and until now that was a
      * guaranteed garble on the first pass.
      */
-    private val OFFSET_TOKEN = Regex("""^(?:utc|gmt)([+-])(\d{1,2})(?::?(\d{2}))?$""")
+    private val OFFSET_TOKEN = Regex("""^(?:utc|gmt)([+-])([0-9]{1,2})(?::?([0-9]{2}))?$""")
 
     /**
      * True when [raw] is a zone token this app actually understands.
