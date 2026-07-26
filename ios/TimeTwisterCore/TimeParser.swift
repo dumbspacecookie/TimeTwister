@@ -47,6 +47,21 @@ public struct DetectedTime: Equatable {
 /// below is biased accordingly.
 public enum TimeParser {
 
+    /// Longest selection we will parse. Roughly a page of text; anything larger is
+    /// a "select all", not a time reference.
+    ///
+    /// It lives here rather than in a host because every host needs it and only one
+    /// had it. Android capped at this value before parsing and was measured safe;
+    /// this platform's Action Extension and keyboard, and the desktop tray, had no
+    /// cap at all — and "Select All" in Notes is one tap from the share sheet. An
+    /// extension that blocks for seconds is killed by the watchdog, and the
+    /// keyboard runs on the main thread on every keystroke.
+    ///
+    /// The parser is linear now, which makes this a belt-and-braces bound rather
+    /// than the load-bearing one it used to be — but the cost of parsing a whole
+    /// document is still real, and nothing good comes of converting one.
+    public static let maxInputChars = 5000
+
     /// Horizontal separators accepted between a time and its zone.
     ///
     /// `\s` is ASCII-only in most engines, which used to mean a non-breaking
@@ -265,6 +280,10 @@ public enum TimeParser {
         options: [.caseInsensitive]
     )
 
+    /// How far back `timeBeforeStamp` may look. The longest thing it can match is a
+    /// time plus the widest label we emit plus separators — comfortably under 64.
+    private static let stampLookback = 64
+
     /// True when the match sits inside a URL or a path.
     ///
     /// Judged from what precedes the match within its own non-space token, not from
@@ -297,11 +316,14 @@ public enum TimeParser {
             .matches(in: text, range: NSRange(location: 0, length: ns.length))
             .map(\.range)
             .filter { range in
-                let before = ns.substring(to: range.location)
-                let beforeNS = before as NSString
+                // Searched over a bounded range rather than a copied prefix. This
+                // runs once per stamp in the text, and copying from the start each
+                // time is how a linear parser becomes quadratic: 200 KB of
+                // already-stamped text took 34 seconds before this was bounded.
+                let start = max(0, range.location - stampLookback)
                 return timeBeforeStamp.firstMatch(
-                    in: before,
-                    range: NSRange(location: 0, length: beforeNS.length)
+                    in: text,
+                    range: NSRange(location: start, length: range.location - start)
                 ) != nil
             }
     }
@@ -326,9 +348,25 @@ public enum TimeParser {
         let stamps = stampRanges(in: text)
         var out: [DetectedTime] = []
 
+        // Both `stamps` and the matches below arrive in increasing start order, so
+        // this advances instead of rescanning. `stamps.contains(where:)` was
+        // O(stamps) per match — on 200 KB of already-stamped text that is ~8,000
+        // stamps against ~16,000 matches, i.e. over a hundred million comparisons
+        // for a question each match should be able to answer in one. It cost 10.6s
+        // here against Kotlin's 0.3s for the same input; the JVM was absorbing the
+        // same bad algorithm well enough to hide it.
+        var stampIndex = 0
+
         for m in pattern.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             // Never re-read our own output.
-            if stamps.contains(where: { NSLocationInRange(m.range.location, $0) }) { continue }
+            while stampIndex < stamps.count,
+                  stamps[stampIndex].location + stamps[stampIndex].length <= m.range.location {
+                stampIndex += 1
+            }
+            if stampIndex < stamps.count,
+               NSLocationInRange(m.range.location, stamps[stampIndex]) {
+                continue
+            }
 
             // A match glued to the right of a digit or a colon is a fragment of a
             // larger number, not a time: "9:5 am" would otherwise yield "5 am".
@@ -371,24 +409,26 @@ public enum TimeParser {
             let hasTz = !(tzRaw ?? "").isEmpty
             let zone = hasTz ? (TimeZoneAlias.resolve(tzRaw!) ?? defaultZone) : defaultZone
 
-            let end = min(m.range.location + m.range.length, ns.length)
-            let after = ns.substring(from: end)
-            let afterNS = after as NSString
-            let afterRange = NSRange(location: 0, length: afterNS.length)
+            // Both checks below look at what immediately follows the match, and both
+            // run once per match, so neither may copy the tail of the string.
+            // `NSRegularExpression` anchors `^` to the start of the search range by
+            // default, which is exactly the question being asked.
+            let afterStart = min(m.range.location + m.range.length, ns.length)
+            let afterRange = NSRange(location: afterStart, length: ns.length - afterStart)
 
             // A zone token sits right there but we did not consume it — either we
             // don't support it, or something (markup, punctuation) separated it
             // from the time. Guessing the device zone would relabel the writer's
             // own words; decline instead.
-            if !hasTz, trailingZoneToken.firstMatch(in: after, range: afterRange) != nil {
+            if !hasTz, trailingZoneToken.firstMatch(in: text, range: afterRange) != nil {
                 continue
             }
 
             // A spelled-out zone word followed by a capitalised word is a place
             // name — "Central Park", not US Central.
             if hasTz, let raw = tzRaw, Self.spelledOut.contains(raw.lowercased()) {
-                if let hit = spelledOutFollower.firstMatch(in: after, range: afterRange) {
-                    let follower = afterNS.substring(with: hit.range(at: 1)).lowercased()
+                if let hit = spelledOutFollower.firstMatch(in: text, range: afterRange) {
+                    let follower = ns.substring(with: hit.range(at: 1)).lowercased()
                     if !Self.zoneSuffixWords.contains(follower) { continue }
                 }
             }

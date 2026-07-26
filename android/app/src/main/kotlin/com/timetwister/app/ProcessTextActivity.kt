@@ -42,7 +42,7 @@ class ProcessTextActivity : Activity() {
         // "Select all" on a long document is one tap away from our menu entry, and the
         // parser is a regex sweep over the whole string on the main thread. Refuse
         // absurd inputs instead of stalling the UI thread of whatever app invoked us.
-        if (input.length > MAX_INPUT_CHARS) {
+        if (input.length > TimeParser.MAX_INPUT_CHARS) {
             toast(getString(R.string.toast_selection_too_long), Toast.LENGTH_SHORT)
             finish()
             return
@@ -118,8 +118,7 @@ class ProcessTextActivity : Activity() {
         Toast.makeText(applicationContext, message, length).show()
     }
 
-    private companion object {
-        /** Roughly a page of text; anything larger is a "select all", not a time reference. */
-        const val MAX_INPUT_CHARS = 5000
-    }
+    // The cap moved to TimeParser.MAX_INPUT_CHARS: every host needs it and only this
+    // one had it, which is exactly how the iOS extension and the desktop tray ended
+    // up able to parse an entire document.
 }

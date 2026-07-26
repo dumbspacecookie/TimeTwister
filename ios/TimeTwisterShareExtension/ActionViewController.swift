@@ -32,6 +32,17 @@ class ActionViewController: UIViewController {
         provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { [weak self] data, _ in
             guard let self = self else { return }
             let input = (data as? String) ?? (data as? URL)?.absoluteString ?? ""
+
+            // "Select All" in Notes or Mail is one tap from this extension, and the
+            // host hands over whatever the user selected. Refuse a whole document
+            // rather than parse it: an action extension that does not return
+            // promptly is killed by the watchdog, and the user sees a hang rather
+            // than a decision. Returning nil leaves their text untouched.
+            guard input.count <= TimeParser.maxInputChars else {
+                DispatchQueue.main.async { self.complete(returning: nil) }
+                return
+            }
+
             let targets = UserPreferences.shared.targetZones
             let out = TimeConverter.splice(input: input, targets: targets)
             DispatchQueue.main.async {

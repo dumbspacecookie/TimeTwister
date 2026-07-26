@@ -1,6 +1,8 @@
 package com.timetwister.core
 
 import java.time.ZoneId
+import java.util.regex.Matcher
+import java.util.regex.Pattern
 
 /**
  * Parses human-written time expressions like "5pm CT", "17:00 ET", "5:30pm pacific".
@@ -11,6 +13,23 @@ import java.time.ZoneId
  * below is biased accordingly.
  */
 object TimeParser {
+
+    /**
+     * Longest selection we will parse. Roughly a page of text; anything larger is a
+     * "select all", not a time reference.
+     *
+     * It lives here rather than in a host because every host needs it and only one
+     * had it. Android capped at this value before parsing and was measured safe;
+     * the iOS Action Extension, the iOS keyboard and the desktop tray had no cap at
+     * all, and "Select All" in Notes is one tap from the share sheet. An extension
+     * that blocks for seconds is killed by the watchdog, and the keyboard runs on
+     * the main thread on every keystroke.
+     *
+     * The parser is linear now, which makes this a belt-and-braces bound rather
+     * than the load-bearing one it used to be — but the cost of parsing a whole
+     * document is still real, and nothing good comes of converting one.
+     */
+    const val MAX_INPUT_CHARS: Int = 5000
 
     /**
      * Horizontal separators accepted between a time and its zone.
@@ -66,7 +85,7 @@ object TimeParser {
      * conversion the user can redo; getting it wrong in the other direction
      * corrupts a message they have already sent.
      */
-    private val SPELLED_OUT_FOLLOWER = Regex("""^$SP+([A-Z][a-z]{2,})""")
+    private val SPELLED_OUT_FOLLOWER: Pattern = Pattern.compile("""^$SP+([A-Z][a-z]{2,})""")
 
     /** Words that are part of a zone name rather than the start of a place name. */
     private val ZONE_SUFFIX_WORDS = setOf("time", "standard", "daylight", "summer", "european")
@@ -183,7 +202,8 @@ object TimeParser {
      * msk") consequently still slip through — that is a known gap with a corpus
      * row, not an oversight.
      */
-    private val TRAILING_ZONE_TOKEN = Regex("""^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b""")
+    private val TRAILING_ZONE_TOKEN: Pattern =
+        Pattern.compile("""^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b""")
 
     /**
      * A relative-time phrase immediately before the match — "half past 5pm",
@@ -228,8 +248,33 @@ object TimeParser {
      * shaped exactly like a single-conversion stamp. Requiring a time immediately
      * before the bracket keeps us from ignoring text we have never touched.
      */
-    private val TIME_BEFORE_STAMP =
-        Regex("""\d{1,2}(?::\d{2})?(?:am|pm)$SP+[A-Za-z][A-Za-z0-9+:/_-]*$SP*$""", RegexOption.IGNORE_CASE)
+    private val TIME_BEFORE_STAMP: Pattern = Pattern.compile(
+        """\d{1,2}(?::\d{2})?(?:am|pm)$SP+[A-Za-z][A-Za-z0-9+:/_-]*$SP*$""",
+        Pattern.CASE_INSENSITIVE,
+    )
+
+    /**
+     * How far back [TIME_BEFORE_STAMP] may look. The longest thing it can match is
+     * a time plus the widest label we emit plus separators — comfortably under 64.
+     *
+     * The bound is the point. This test runs once per stamp in the text, and
+     * scanning from the start of the string each time is how a linear parser
+     * becomes quadratic: 200 KB of already-stamped text took 34 seconds before
+     * these were bounded. Android caps its input at 5000 characters and was safe;
+     * the iOS extension, the iOS keyboard and the desktop tray had no cap at all.
+     */
+    private const val STAMP_LOOKBACK = 64
+
+    /**
+     * Run [pattern] over `text[start, end)` without copying the substring.
+     *
+     * `Matcher.region` keeps anchoring bounds on by default, so `^` and `$` mean
+     * "start/end of this region" — which is exactly the question every caller here
+     * is asking, and the reason a region beats a substring even before the
+     * allocation is considered.
+     */
+    private fun matcherOn(pattern: Pattern, text: String, start: Int, end: Int): Matcher =
+        pattern.matcher(text).region(start.coerceIn(0, text.length), end.coerceIn(0, text.length))
 
     /**
      * True when the match sits inside a URL or a path.
@@ -252,7 +297,14 @@ object TimeParser {
     /** Ranges occupied by stamps this tool rendered earlier. */
     private fun stampRanges(text: String): List<IntRange> =
         STAMP.findAll(text)
-            .filter { TIME_BEFORE_STAMP.containsMatchIn(text.substring(0, it.range.first)) }
+            .filter {
+                matcherOn(
+                    TIME_BEFORE_STAMP,
+                    text,
+                    it.range.first - STAMP_LOOKBACK,
+                    it.range.first,
+                ).find()
+            }
             .map { it.range }
             .toList()
 
@@ -261,9 +313,24 @@ object TimeParser {
         val out = mutableListOf<DetectedTime>()
         val stamps = stampRanges(text)
 
+        // Both `stamps` and the matches below arrive in increasing start order, so
+        // this advances instead of rescanning. `stamps.any { ... }` was O(stamps)
+        // per match — on 200 KB of already-stamped text that is ~8,000 stamps
+        // against ~16,000 matches, i.e. over a hundred million comparisons for a
+        // question each match should be able to answer in one.
+        var stampIndex = 0
+
         for (m in pattern.findAll(text)) {
             // Never re-read our own output.
-            if (stamps.any { m.range.first >= it.first && m.range.first <= it.last }) continue
+            while (stampIndex < stamps.size && stamps[stampIndex].last < m.range.first) {
+                stampIndex++
+            }
+            if (stampIndex < stamps.size &&
+                m.range.first >= stamps[stampIndex].first &&
+                m.range.first <= stamps[stampIndex].last
+            ) {
+                continue
+            }
 
             // A match glued to the right of a digit or a colon is a fragment of a
             // larger number, not a time: "9:5 am" would otherwise yield "5 am".
@@ -290,18 +357,26 @@ object TimeParser {
             val hasTz = !tzRaw.isNullOrEmpty()
             val zone = if (hasTz) TimeZoneAlias.resolve(tzRaw!!) ?: defaultZone else defaultZone
 
-            val after = text.substring(minOf(m.range.last + 1, text.length))
+            // Both checks below look at what immediately follows the match, and both
+            // run once per match, so neither may copy the tail of the string.
+            val afterStart = minOf(m.range.last + 1, text.length)
 
             // A zone token sits right there but we did not consume it — either we
             // don't support it, or something (markup, punctuation) separated it
             // from the time. Guessing the device zone would relabel the writer's
             // own words; decline instead.
-            if (!hasTz && TRAILING_ZONE_TOKEN.containsMatchIn(after)) continue
+            if (!hasTz &&
+                matcherOn(TRAILING_ZONE_TOKEN, text, afterStart, text.length).lookingAt()
+            ) {
+                continue
+            }
 
             // A spelled-out zone word followed by a capitalised word is a place
             // name — "Central Park", not US Central.
             if (hasTz && tzRaw!!.lowercase() in SPELLED_OUT) {
-                val follower = SPELLED_OUT_FOLLOWER.find(after)?.groupValues?.get(1)
+                val follower = matcherOn(SPELLED_OUT_FOLLOWER, text, afterStart, text.length)
+                    .takeIf { it.lookingAt() }
+                    ?.group(1)
                 if (follower != null && follower.lowercase() !in ZONE_SUFFIX_WORDS) continue
             }
 

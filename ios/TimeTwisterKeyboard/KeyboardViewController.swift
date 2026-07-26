@@ -46,8 +46,28 @@ public final class KeyboardViewController: UIInputViewController {
 
     // MARK: - Suggestion logic
 
+    /// The text before the cursor, bounded to a window.
+    ///
+    /// `detect` runs on this on **every keystroke, on the main thread**, and iOS
+    /// makes no promise about how much context it hands back. Only the most recent
+    /// time phrase is ever offered, so everything past the window is work whose
+    /// result is discarded.
+    ///
+    /// Both callers must use this rather than the proxy directly: `apply` computes
+    /// offsets against the same string `refreshSuggestions` detected in, so if one
+    /// clamped and the other did not, every range would be wrong by the length of
+    /// what was trimmed — and the keyboard would delete the wrong characters.
+    private func contextBefore() -> String {
+        let raw = textDocumentProxy.documentContextBeforeInput ?? ""
+        guard raw.count > Self.contextWindow else { return raw }
+        return String(raw.suffix(Self.contextWindow))
+    }
+
+    /// Generous next to any real time phrase, small next to a document.
+    private static let contextWindow = 512
+
     private func refreshSuggestions() {
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let before = contextBefore()
         let after = textDocumentProxy.documentContextAfterInput ?? ""
         let context = before + after
         guard context != lastSeenContext else { return }
@@ -75,7 +95,8 @@ public final class KeyboardViewController: UIInputViewController {
         // Delete the original phrase from the document. documentContextBeforeInput
         // gives us the text ending at the cursor, so we know how far back to
         // delete.
-        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        // Same window refreshSuggestions detected in — see contextBefore().
+        let before = contextBefore()
         let nsBefore = before as NSString
         let tail = nsBefore.length - detected.range.location - detected.range.length
         if tail == 0 {

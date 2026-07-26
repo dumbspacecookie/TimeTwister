@@ -38,6 +38,20 @@ object ConvertAction {
             return
         }
 
+        // A clipboard can hold an entire document, and this runs on the EDT — so
+        // parsing one freezes the tray and the settings window with it. Android has
+        // capped its selection since the start; this path and the two iOS ones did
+        // not, which is the whole reason the cap now lives in the core.
+        if (input.length > TimeParser.MAX_INPUT_CHARS) {
+            notify.notify(
+                "TimeTwister",
+                "Clipboard is too long (${input.length} characters). Copy just the " +
+                    "line with the time in it.",
+                false,
+            )
+            return
+        }
+
         if (TimeParser.detectLast(input) == null) {
             notify.notify("TimeTwister", "No time reference found in clipboard.", false)
             return
