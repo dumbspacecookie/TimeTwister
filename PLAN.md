@@ -26,12 +26,12 @@ and the iOS pipeline has never gone green.
 
 | | State |
 |---|---|
-| Shared Kotlin core | 263-row graded corpus, blocking gate 100%, overall 98.10% (four deliberate open gaps); 9 invariants over 500 seeded cases each; perf guarded |
-| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. One known divergence left: `G109`, ICU folding U+212A KELVIN inside a case-insensitive ASCII class |
-| Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below) |
-| Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested |
+| Shared Kotlin core | 276-row graded corpus, blocking gate 100%, overall 99.35% (five deliberate `known_gap` rows); 9 invariants over 500 seeded cases each; perf guarded. **63 tests** |
+| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. **72 tests.** One known divergence left: `G109`, ICU folding U+212A KELVIN inside a case-insensitive ASCII class |
+| Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below). **28 unit tests as of 2026-07-26** — before that the module had no test source set and CI's test step was passing vacuously |
+| Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested. **71 tests** (composes the core in) |
 | iOS app | Core is verified; the app, keyboard and share extension still need a Mac |
-| CI | Android + desktop jobs sound. iOS almost certainly never passed (no schemes were declared until recently, still unverified) |
+| CI | Android + desktop jobs sound. Swift core is covered twice as of 2026-07-26 — `xcodebuild` on macOS (always was) and a new fast `swift test` job for the SwiftPM path (**unverified: no remote, so it has never run**). iOS app build almost certainly never passed (no schemes were declared until recently, still unverified) |
 
 Test loop — no Android SDK needed for either core:
 
@@ -195,11 +195,40 @@ is left.
 - [x] ~~Three of the four §5 defects have no corpus row.~~ Two are fixed; the
       rest are `known_gap` rows (G105–G108). **Overall precision now reads 99.35%,
       not 100%** — the score says what is missing again, and OPEN ITEMS prints.
-- [ ] `android/app` has **no `src/test` and no `androidTest`** — CI's
-      `:app:testDebugUnitTest` passes vacuously. CI never runs `swift test`
-      either. Cheapest first test: `UserPreferences.decode/encode`, where
-      `defaults.size <= MAX_RECOMMENDED_ZONES` is reported to **fail today**
-      outside the US (agent-reported, not yet verified by hand).
+- [x] ~~`android/app` has **no `src/test` and no `androidTest`** — CI's
+      `:app:testDebugUnitTest` passes vacuously.~~ **Fixed 2026-07-26.** 28 unit
+      tests, no new dependency: the logic worth testing was lifted into
+      `ProcessTextDecision.kt` (pure — the five ACTION_PROCESS_TEXT outcomes, which
+      is the whole feature and had never been tested at all) and into
+      `UserPreferences`' companion. The activity keeps only platform plumbing.
+      - **The vacuity gate needed two halves, and the first version was inert.** A
+        test listener plus `doLast` cannot fire when there are no tests, because
+        Gradle marks the task NO-SOURCE and *skips* it — hiding `src/test` gave
+        `BUILD SUCCESSFUL in 1s`, exactly the failure being guarded. There is now a
+        `taskGraph.whenReady` source check as well. Both halves verified by making
+        each failure happen: suite deleted → fails; floor raised to 29 against 28
+        tests → fails.
+      - **The `MAX_RECOMMENDED_ZONES` report was true, and worse than reported.**
+        "Your zone + four US zones" is five entries — over the soft cap — so a fresh
+        install opened settings already showing the red "too many zones" warning
+        about a list the user had never touched. Not only outside the US: Phoenix,
+        Anchorage and Honolulu hit it too, which is why it was invisible from a US
+        desk. `computeDefaults(systemZone)` now trims to the cap, dropping Mountain
+        (least populous; anyone who wants it is usually in it, and their own zone
+        covers it). Pinned by tests at 15 zones incl. all four US ones.
+- [x] ~~CI never runs `swift test`.~~ **Half of this was wrong** and worth
+      correcting rather than "fixing": the macOS job already runs the full Swift core
+      suite via `xcodebuild -only-testing:TimeTwisterCoreTests`, against the *same*
+      source folder SwiftPM uses, so the Swift core was never untested in CI. The
+      real gap was the **SwiftPM** path — `swift test`, the only way to run this core
+      without a Mac — which nothing exercised, so `Package.swift` could break while
+      every macOS build stayed green. Added a `swift-core` job on `swift:6.1`
+      (~1 min, so it reports before the mac runner) that also asserts the shared
+      corpus file is present, because `EvalCorpusTests` *skips* without it and a
+      skipped eval gate is the vacuous pass this repo keeps re-learning.
+      ⚠️ **Unverified: needs its first CI run.** There is no Linux here, and no git
+      remote, so the job has never executed. `swift test` passes locally on Windows
+      (72 tests) against the same manifest.
 
 **Security / privacy** (nothing critical; full details in the review)
 
@@ -215,12 +244,38 @@ is left.
 **UX**, from a real emulator session (everything changed in the icon/backup work
 verified PASS; these are pre-existing)
 
-- [ ] 🔴 **Intermittent stale settings UI.** Once in four, adding a zone
-      persisted to both stores but the screen did not update — reads to the user
-      as "Add timezone silently does nothing". Confirmed against the
-      accessibility tree, not pixels. Likely `targetZonesFlow()` allocating a new
-      Flow per recomposition and re-keying `collectAsState`; hoisting it into a
-      `remember` closes the window.
+- [x] ~~🔴 **Intermittent stale settings UI.**~~ **Fixed and measured 2026-07-26.**
+      The diagnosis was right: `targetZonesFlow()` returned `dataStore.data.map { … }`,
+      a fresh Flow per call, and `collectAsState` keys its `LaunchedEffect` on flow
+      *identity* — so every recomposition cancelled the DataStore subscription and
+      started another. Closing the picker after an add is a recomposition, so the
+      emission could land on the collector being torn down. Pinned at both ends
+      (cached in `UserPreferences`, `remember`ed in `SettingsScreen`) because either
+      one alone silently masks the other.
+      - **Measured, not argued.** A 40% failure rate does not survive "looks right".
+        A driver script (`uiautomator` tree, never pixels) ran the add cycle on a
+        real AVD: **pre-fix 4/10 stale, post-fix 0/10** — under the pre-fix rate
+        that is p ≈ 0.006. Every pre-fix failure reported `persisted=yes` with the
+        screen showing exactly the four defaults, matching the bug report exactly.
+      - **The trigger was not "adding a zone", it was "adding a zone on a cold
+        start".** Hammering add/remove in a warm loop failed only 1 in 20, and both
+        times on cycle 1. One add per fresh launch failed 4 in 10. The recomposition
+        churn while the first frame settles is what widens the window — so the
+        loop test everyone would reach for first is the one that nearly missed it.
+      - **The probe found the bug in itself first.** Its initial version reported
+        100% failure with `before=[]`: the zone rows sit mid-page and it was reading
+        the tree scrolled to the top, so it saw no rows at all and blamed the app.
+        A measurement that reports a real bug for the wrong reason is worse than no
+        measurement — it now unions every scroll position.
+      - A second, latent bug fell out of the same read: all three call sites passed
+        `setTargetZones(zones ± x)` with `zones` captured from their own composition,
+        so two adds built from the same snapshot would **silently drop the first
+        zone** (entirely reachable in the suggestions dialog, which offers several
+        Add buttons at once). Replaced with `addTargetZone`/`removeTargetZone`, which
+        read-modify-write *inside* the DataStore transaction. Verified separately
+        that remove still propagates and does not take the other zones with it —
+        neither race probe could have caught a broken remove, because a remove that
+        does nothing leaves the zone on screen, which reads as success.
 - [ ] Launcher icon has **zero safe-zone margin** — the clock ring sits exactly
       on the mask boundary, so it reads as a bordered tile and will clip under
       any mask tighter than Pixel's circle.

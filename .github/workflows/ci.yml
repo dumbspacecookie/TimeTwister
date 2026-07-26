@@ -17,6 +17,42 @@ permissions:
   contents: read
 
 jobs:
+  # The core's tests already run on the macOS job below, via xcodebuild against the same
+  # TimeTwisterCoreTests folder. What was NOT covered is the SwiftPM path — `swift test`,
+  # which is how the core is actually developed on Windows and the only way to run it
+  # without a Mac. Package.swift could break (or drift from the Xcode target's source
+  # list) and every macOS build would stay green while non-Mac work stopped dead.
+  #
+  # This job is also the fast one: it reports in ~1 minute against ~10 for the mac runner,
+  # so it is the signal you get first on a parser change.
+  swift-core:
+    name: Swift Core · swift test (SwiftPM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Official Swift image, pinned: `latest` would silently change compiler versions
+    # under the suite. Bump deliberately.
+    container: swift:6.1
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Record toolchain version
+        run: swift --version
+
+      # EvalCorpusTests locates android/core/src/test/resources/eval/corpus.tsv relative
+      # to its own #filePath, so it grades against the same rows as Kotlin — but only in a
+      # real source checkout. It self-skips elsewhere, and a skipped eval gate is exactly
+      # the vacuous pass this repo has been bitten by, so assert the file is there first.
+      - name: Verify the shared corpus is present
+        run: test -f ../android/core/src/test/resources/eval/corpus.tsv
+
+      - name: swift test
+        run: swift test
+
   ios:
     name: iOS · Build & Test
     runs-on: macos-15
