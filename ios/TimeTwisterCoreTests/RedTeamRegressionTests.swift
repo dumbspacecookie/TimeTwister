@@ -209,6 +209,40 @@ final class RedTeamRegressionTests: XCTestCase {
         XCTAssertNil(maybeSplice(input, at: springForward))
     }
 
+    // MARK: - D6: the OTHER DST edge, pinned rather than fixed
+
+    /// An autumn fall-back makes a wall clock happen twice. 2026-11-01 in
+    /// America/New_York rewinds at 2am, so "1:30am" names two instants an hour
+    /// apart: 05:30Z at -04:00, and 06:30Z at -05:00.
+    ///
+    /// We take the first, silently. That is a deliberate decision, not an
+    /// oversight, and this test exists so it stays one:
+    ///
+    ///  - It is not the same problem as the spring-forward gap. That one asks us to
+    ///    invent a time that does not exist, so `isUnrepresentable` refuses it. This
+    ///    one asks us to choose between two that do, and an ambiguous time
+    ///    round-trips perfectly, so that guard structurally cannot fire here.
+    ///  - The earlier instant is the conventional reading — it is what
+    ///    `Calendar.date(from:)` and every calendar application default to.
+    ///  - The exposure is one hour, once a year, per zone, at 1-2am.
+    ///
+    /// Both cores agree on this, which is the part that matters most: a stamp is
+    /// worthless if Android and iOS disagree about which hour it means.
+    func testAnAmbiguousWallClockResolvesToTheEarlierOfItsTwoInstants() throws {
+        let eveningBefore = Self.date(utc: (2026, 11, 1, 0, 0))  // 2026-10-31 20:00 EDT
+        let detected = try XCTUnwrap(detectLast("call at 1:30am ET"))
+
+        XCTAssertFalse(
+            TimeConverter.isUnrepresentable(detected, now: eveningBefore),
+            "an ambiguous time is representable — the gap guard must not fire"
+        )
+        let resolved = TimeConverter.absoluteDate(for: detected, now: eveningBefore)
+        XCTAssertEqual(resolved.timeIntervalSince1970,
+                       Self.date(utc: (2026, 11, 1, 5, 30)).timeIntervalSince1970,
+                       "expected the first 1:30am (05:30Z), not the second (06:30Z)")
+        XCTAssertEqual(et.secondsFromGMT(for: resolved), -4 * 3600)
+    }
+
     // MARK: - RT-12
     // Was: Australia/Sydney rendered "AEST" in January (it is on AEDT) and Paris
     // rendered "CET" all summer. The number was right, the label contradicted it.

@@ -186,6 +186,33 @@ object TimeParser {
     private val TRAILING_ZONE_TOKEN = Regex("""^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b""")
 
     /**
+     * A relative-time phrase immediately before the match — "half past 5pm",
+     * "quarter to 6pm", "ten past 3pm".
+     *
+     * These read as an offset from the hour, and we parse only the hour. So
+     * "half past 5pm ET" was rendering "(4pm CT · 2pm PT)" — the equivalents of
+     * 5:00, while the sentence the reader is looking at says half past. A silent
+     * half-hour error in a message that has already been sent, which is worse than
+     * the false positives this parser is otherwise arranged to avoid, because
+     * nothing about the output looks wrong.
+     *
+     * Declining is the fix rather than implementing the arithmetic: "half past 5
+     * ET" has no am/pm and is already refused for that reason, so supporting the
+     * phrase would mean guessing morning or evening — exactly what the
+     * disambiguator rule exists to prevent. A missed conversion costs a retry.
+     *
+     * "5 to 6pm" and "10 to 6pm" are caught by the same rule and are genuinely
+     * ambiguous between a range and a relative time, so declining both is right.
+     */
+    private val RELATIVE_TIME_PREFIX = Regex(
+        """(?i)\b(?:half|quarter|five|ten|twenty|twenty[-\x20]?five|\d{1,2})""" +
+            """$SP+(?:past|to|after|till|til)$SP*$""",
+    )
+
+    /** Longest phrase RELATIVE_TIME_PREFIX can match ("twenty-five after " = 18). */
+    private const val RELATIVE_LOOKBACK = 32
+
+    /**
      * A URL or path scheme at the very start of the token the match sits in.
      *
      * "see https://x.com/a/5pm now" was rewritten to
@@ -245,6 +272,16 @@ object TimeParser {
 
             // Inside a URL or a path — never a time meant for a reader.
             if (isInsideUrlOrPath(text, m.range)) continue
+
+            // "half past 5pm" — an offset from the hour we would render as the hour.
+            // Bounded lookback rather than the whole prefix: this runs once per
+            // match, and copying the prefix each time is how a linear parser turns
+            // quadratic on a long selection.
+            val lookback = text.substring(
+                maxOf(0, m.range.first - RELATIVE_LOOKBACK),
+                m.range.first,
+            )
+            if (RELATIVE_TIME_PREFIX.containsMatchIn(lookback)) continue
 
             val keywordRaw = m.groups["keyword"]?.value?.lowercase()
             val tzRaw = m.groups["tz"]?.value

@@ -219,7 +219,16 @@ drop into the existing corpus + regression suites:
       if a two-hour window maps to a single time. *(Blocked on A001 below.)*
 - [ ] **`5.30pm`** — a dot is not accepted as a minute separator; silently does nothing
 - [ ] **`1700 UTC`** — no military-time support at all
-- [ ] **`half past 5`** — silently does nothing
+- [x] ~~**`half past 5`** — silently does nothing~~ **Resolved 2026-07-25, and the
+      item was aimed at the wrong input.** `half past 5 ET` is *correctly* declined:
+      it has no am/pm, so it fails the disambiguator exactly like a bare `5 ET`, and
+      supporting it would mean guessing morning or evening. The real defect was next
+      door and nobody had written it down — `half past 5pm ET` **converted 5:00**,
+      rendering "(4pm CT · 2pm PT)" under a sentence that says half past. A silent
+      30-minute error, both cores, no corpus coverage. Same for `quarter past`,
+      `quarter to` and the numeric forms. All now decline; 7 corpus rows, including
+      two that check the guard does not over-decline (`I'll get to 5pm ET later`,
+      `half the team joins 5pm ET`).
 
 ### 6. Property tests for the Swift core
 
@@ -282,18 +291,13 @@ awaiting adjudication. `A001` gates the ranges work in item 5.
 | A007 | `17h00 CET` | European notation — in scope? |
 | A008 | `tomorrow 9am` | "tomorrow" is ignored by the roll-forward heuristic |
 
-### D6. Ambiguous wall-clock times (autumn fall-back)
-`1:30am ET` on 2026-11-01 names two different instants an hour apart. Both cores
-silently pick the earlier one, unmarked. Options: refuse to convert (matches this
-codebase's stated bar — "we would rather leave the text untouched"), or convert
-and mark it ambiguous (keeps it useful, costs stamp width). Asked on 2026-07-25;
-both were selected, which cannot both be the behaviour — still open.
+### ~~D6. Ambiguous wall-clock times~~ — **decided 2026-07-25: keep, pin, document**
+See "Accepted, not scheduled". Both cores take the earlier instant, which is the
+conventional reading, and a test in each red-team suite now pins it so the
+behaviour cannot drift silently.
 
-### D7. `half past 5 ET` — corpus says correct, roadmap says defect
-It is a **blocking** `must_not_detect` row that passes, so it counts toward the
-score and is protected against being fixed. §5 lists it as an open defect. One of
-the two has to give: either drop it from §5 and keep the no-op deliberately, or
-move the row to `known_gap` and implement it later. Asked 2026-07-25, unanswered.
+### ~~D7. `half past 5 ET`~~ — **resolved 2026-07-25; the question was mis-aimed**
+The corpus row was right and the roadmap item was wrong. See §5.
 
 ### D4. Signing material
 Android keystore; six Apple secrets. Needed before anything reaches a person.
@@ -319,6 +323,19 @@ remaining iOS item.
 
 ## Accepted, not scheduled
 
+- **An ambiguous wall clock resolves to the earlier of its two instants, silently.**
+  On an autumn fall-back the hour repeats, so `1:30am ET` on 2026-11-01 names both
+  05:30Z and 06:30Z. We take the first. This is not the spring-forward case — that
+  one asks us to invent a time that does not exist and is refused; this one asks us
+  to choose between two that do, and an ambiguous time round-trips perfectly, so
+  the gap guard structurally cannot fire. The earlier instant is what
+  `ZonedDateTime.of`, `Calendar.date(from:)` and every calendar app default to, and
+  the exposure is one hour a year per zone at 1-2am. Refusing would decline an
+  ordinary-looking input with an explanation nobody wants; a marker would hang off
+  the source label and read as noise. **Both cores agree**, which is the part that
+  matters — a stamp is worthless if the two platforms disagree about which hour it
+  means. Pinned by `anAmbiguousWallClockResolvesToTheEarlierOfItsTwoInstants` in
+  both red-team suites.
 - Cached zone list can go stale if the device zone changes and Settings is never opened
 - Desktop has no autostart-on-login
 - `values-night` only takes effect at API 29+; `minSdk` is 26

@@ -219,6 +219,32 @@ public enum TimeParser {
     private static let trailingZoneToken =
         try! NSRegularExpression(pattern: #"^[^A-Za-z0-9.,!?;:]*([A-Z]{2,5})\b"#)
 
+    /// A relative-time phrase immediately before the match — "half past 5pm",
+    /// "quarter to 6pm", "ten past 3pm".
+    ///
+    /// These read as an offset from the hour, and we parse only the hour. So
+    /// "half past 5pm ET" was rendering "(4pm CT · 2pm PT)" — the equivalents of
+    /// 5:00, while the sentence the reader is looking at says half past. A silent
+    /// half-hour error in a message that has already been sent, which is worse than
+    /// the false positives this parser is otherwise arranged to avoid, because
+    /// nothing about the output looks wrong.
+    ///
+    /// Declining is the fix rather than implementing the arithmetic: "half past 5
+    /// ET" has no am/pm and is already refused for that reason, so supporting the
+    /// phrase would mean guessing morning or evening — exactly what the
+    /// disambiguator rule exists to prevent. A missed conversion costs a retry.
+    ///
+    /// "5 to 6pm" and "10 to 6pm" are caught by the same rule and are genuinely
+    /// ambiguous between a range and a relative time, so declining both is right.
+    private static let relativeTimePrefix = try! NSRegularExpression(
+        pattern: #"\b(?:half|quarter|five|ten|twenty|twenty[-\x20]?five|\d{1,2})"#
+            + #"\#(SP)+(?:past|to|after|till|til)\#(SP)*$"#,
+        options: [.caseInsensitive]
+    )
+
+    /// Longest phrase `relativeTimePrefix` can match ("twenty-five after " = 18).
+    private static let relativeLookback = 32
+
     /// A URL or path scheme at the very start of the token the match sits in.
     ///
     /// "see https://x.com/a/5pm now" was rewritten to
@@ -321,6 +347,19 @@ public enum TimeParser {
 
             // Inside a URL or a path — never a time meant for a reader.
             if isInsideUrlOrPath(ns, m.range) { continue }
+
+            // "half past 5pm" — an offset from the hour we would render as the hour.
+            //
+            // Searched over a bounded range rather than a copied prefix: this runs
+            // once per match, and materialising the prefix each time is how a linear
+            // parser turns quadratic on a long selection. `$` anchors to the end of
+            // the search range by default, which is exactly the "immediately before
+            // the match" test we want.
+            let lookbackStart = max(0, m.range.location - relativeLookback)
+            if relativeTimePrefix.firstMatch(
+                in: text,
+                range: NSRange(location: lookbackStart, length: m.range.location - lookbackStart)
+            ) != nil { continue }
 
             func group(_ name: String) -> String? {
                 let r = m.range(withName: name)

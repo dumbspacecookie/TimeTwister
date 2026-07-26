@@ -144,6 +144,41 @@ class RedTeamRegressionTest {
         assertNull(TimeConverter.maybeSplice(input, targets, readOnly = false, now = springForward))
     }
 
+    // -- D6: the OTHER DST edge, pinned rather than fixed --------------------
+    /**
+     * An autumn fall-back makes a wall clock happen twice. 2026-11-01 in
+     * America/New_York rewinds at 2am, so "1:30am" names two instants an hour
+     * apart: 05:30Z at -04:00, and 06:30Z at -05:00.
+     *
+     * We take the first, silently. That is a deliberate decision, not an
+     * oversight, and this test exists so it stays one:
+     *
+     *  - It is not the same problem as the spring-forward gap. That one asks us to
+     *    invent a time that does not exist, so [isUnrepresentable] refuses it. This
+     *    one asks us to choose between two that do, and an ambiguous time
+     *    round-trips perfectly, so that guard structurally cannot fire here.
+     *  - The earlier instant is the conventional reading — it is what
+     *    `ZonedDateTime.of` and every calendar application default to.
+     *  - The exposure is one hour, once a year, per zone, at 1-2am.
+     *
+     * Refusing would decline an ordinary-looking input with an explanation nobody
+     * wants ("it happens twice" — they mean the first one). If that trade is ever
+     * revisited, this test is what will tell you the behaviour moved.
+     */
+    @Test
+    fun anAmbiguousWallClockResolvesToTheEarlierOfItsTwoInstants() {
+        val eveningBefore = ZonedDateTime.of(2026, 10, 31, 20, 0, 0, 0, et)
+        val detected = TimeParser.detectLast("call at 1:30am ET")!!
+
+        assertTrue(
+            "an ambiguous time is representable — the gap guard must not fire",
+            !TimeConverter.isUnrepresentable(detected, eveningBefore),
+        )
+        val resolved = TimeConverter.absoluteInstant(detected, eveningBefore)
+        assertEquals(java.time.ZoneOffset.ofHours(-4), resolved.offset)
+        assertEquals("2026-11-01T05:30:00Z", resolved.toInstant().toString())
+    }
+
     // -- RT-12 -------------------------------------------------------------
     // Was: Australia/Sydney rendered "AEST" in January (it is on AEDT) and Paris
     // rendered "CET" all summer. The number was right, the label contradicted it.
