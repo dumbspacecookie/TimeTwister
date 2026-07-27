@@ -50,11 +50,11 @@ final class PerformanceTests: XCTestCase {
         // One untimed pass, to match the Kotlin harness and to keep first-call
         // regex compilation out of the measurement.
         _ = TimeConverter.splice(input: text, targets: Self.targets, now: Self.now,
-                                 defaultZone: Self.zone)
+                                 defaultZone: Self.sourceZone)
 
         let start = Date()
         _ = TimeConverter.splice(input: text, targets: Self.targets, now: Self.now,
-                                 defaultZone: Self.zone)
+                                 defaultZone: Self.sourceZone)
         let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertLessThan(
@@ -76,7 +76,12 @@ final class PerformanceTests: XCTestCase {
         return cal.date(from: c)!
     }()
 
-    static let zone = TimeZone(identifier: "America/New_York")!
+    // NOT named `zone`: XCTestCase inherits NSObject, whose legacy `-zone` selector a
+    // member called `zone` collides with under Objective-C interop -- "getter for 'zone'
+    // ... conflicts with method 'zone()' from superclass 'NSObject'". It is a hard error
+    // under Xcode and completely invisible to `swift test` on Windows, which has no
+    // Objective-C runtime. That is the whole iOS CI job's reason for existing.
+    static let sourceZone = TimeZone(identifier: "America/New_York")!
 
     static let targets: [TimeZone] = [
         "America/Chicago", "America/New_York", "America/Los_Angeles",

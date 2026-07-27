@@ -84,14 +84,14 @@ final class PropertyTests: XCTestCase {
     /// Everything outside the detected range must survive the splice byte for byte.
     func testSpliceNeverLosesTheSurroundingText() {
         runProperty("preserves-context") { input, targets in
-            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.sourceZone) else {
                 return nil
             }
             let ns = input as NSString
             let prefix = ns.substring(to: detected.range.location)
             let suffix = ns.substring(from: detected.range.location + detected.range.length)
             let out = TimeConverter.splice(
-                input: input, targets: targets, now: Self.now, defaultZone: Self.zone
+                input: input, targets: targets, now: Self.now, defaultZone: Self.sourceZone
             )
             // Compared in UTF-16, deliberately. Comparing Characters is what hid the
             // grapheme-rounding bug in the first place: a trailing "T" fused into
@@ -141,10 +141,10 @@ final class PropertyTests: XCTestCase {
     func testSpliceIsIdempotent() {
         runProperty("idempotent") { input, targets in
             let once = TimeConverter.splice(
-                input: input, targets: targets, now: Self.now, defaultZone: Self.zone
+                input: input, targets: targets, now: Self.now, defaultZone: Self.sourceZone
             )
             let twice = TimeConverter.splice(
-                input: once, targets: targets, now: Self.now, defaultZone: Self.zone
+                input: once, targets: targets, now: Self.now, defaultZone: Self.sourceZone
             )
             guard once != twice else { return nil }
             return "second pass changed the text again:\n"
@@ -187,7 +187,7 @@ final class PropertyTests: XCTestCase {
     /// actually said before any conversion of it.
     func testStampAlwaysLeadsWithTheSourceLabel() {
         runProperty("source-label-first") { input, targets in
-            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.sourceZone) else {
                 return nil
             }
             let stamp = TimeConverter.renderStamp(
@@ -211,7 +211,7 @@ final class PropertyTests: XCTestCase {
     /// of its own conversions.
     func testStampTargetsAreDistinctAndNeverRepeatTheSource() {
         runProperty("distinct-targets") { input, targets in
-            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.sourceZone) else {
                 return nil
             }
             let stamp = TimeConverter.renderStamp(
@@ -236,7 +236,7 @@ final class PropertyTests: XCTestCase {
     /// The head of a rendered stamp must re-parse to the time it was rendered from.
     func testRenderedStampRoundTripsToTheSameInstant() {
         runProperty("round-trip") { input, targets in
-            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.zone) else {
+            guard let detected = TimeParser.detectLast(in: input, defaultZone: Self.sourceZone) else {
                 return nil
             }
             let at = TimeConverter.absoluteDate(for: detected, now: Self.now)
@@ -252,7 +252,7 @@ final class PropertyTests: XCTestCase {
             let head = headOf(
                 TimeConverter.renderStamp(for: detected, targets: targets, now: Self.now)
             )
-            guard let reparsed = TimeParser.detectLast(in: head, defaultZone: Self.zone) else {
+            guard let reparsed = TimeParser.detectLast(in: head, defaultZone: Self.sourceZone) else {
                 return "rendered stamp head \(show(head)) does not re-parse at all"
             }
             let sameZone = reparsed.timeZone.secondsFromGMT(for: at)
@@ -274,8 +274,8 @@ final class PropertyTests: XCTestCase {
     /// identical.
     func testDetectIsStableUnderSurroundingWhitespace() {
         runProperty("whitespace-stable") { input, _ in
-            let bare = TimeParser.detect(in: input, defaultZone: Self.zone)
-            let padded = TimeParser.detect(in: "  " + input + "  ", defaultZone: Self.zone)
+            let bare = TimeParser.detect(in: input, defaultZone: Self.sourceZone)
+            let padded = TimeParser.detect(in: "  " + input + "  ", defaultZone: Self.sourceZone)
             if bare.count != padded.count {
                 return "padding changed the number of detections: \(bare.count) -> \(padded.count)"
             }
@@ -297,9 +297,9 @@ final class PropertyTests: XCTestCase {
     /// what is asserted here is the part that actually matters to a caller.
     func testSpliceReturnsTheInputUnchangedWhenNothingIsDetected() {
         runProperty("no-detect-identity") { input, targets in
-            guard TimeParser.detect(in: input, defaultZone: Self.zone).isEmpty else { return nil }
+            guard TimeParser.detect(in: input, defaultZone: Self.sourceZone).isEmpty else { return nil }
             let out = TimeConverter.splice(
-                input: input, targets: targets, now: Self.now, defaultZone: Self.zone
+                input: input, targets: targets, now: Self.now, defaultZone: Self.sourceZone
             )
             guard out != input else { return nil }
             return "detect() was empty so splice() must hand back the input unchanged, "
@@ -313,13 +313,13 @@ final class PropertyTests: XCTestCase {
     /// in splice are both places a bad input could take the process down.
     func testSpliceNeverThrows() {
         runProperty("never-throws") { input, targets in
-            _ = TimeParser.detect(in: input, defaultZone: Self.zone)
+            _ = TimeParser.detect(in: input, defaultZone: Self.sourceZone)
             _ = TimeConverter.splice(
-                input: input, targets: targets, now: Self.now, defaultZone: Self.zone
+                input: input, targets: targets, now: Self.now, defaultZone: Self.sourceZone
             )
             _ = TimeConverter.maybeSplice(
                 input: input, targets: targets, readOnly: false, now: Self.now,
-                defaultZone: Self.zone
+                defaultZone: Self.sourceZone
             )
             return nil
         }
@@ -469,7 +469,12 @@ final class PropertyTests: XCTestCase {
         return cal.date(from: c)!
     }()
 
-    static let zone = TimeZone(identifier: "America/New_York")!
+    // NOT named `zone`: XCTestCase inherits NSObject, whose legacy `-zone` selector a
+    // member called `zone` collides with under Objective-C interop -- "getter for 'zone'
+    // ... conflicts with method 'zone()' from superclass 'NSObject'". It is a hard error
+    // under Xcode and completely invisible to `swift test` on Windows, which has no
+    // Objective-C runtime. That is the whole iOS CI job's reason for existing.
+    static let sourceZone = TimeZone(identifier: "America/New_York")!
 
     static let targetSets: [[TimeZone]] = [
         ["America/Chicago", "America/New_York", "America/Los_Angeles", "Europe/London"],
