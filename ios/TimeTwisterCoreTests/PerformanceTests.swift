@@ -46,7 +46,21 @@ final class PerformanceTests: XCTestCase {
         )
     }
 
-    private func assertUnder(_ label: String, _ text: String, budget: TimeInterval) {
+    /// Wall-clock budgets do not port to a shared CI runner, and pretending otherwise made
+    /// the iOS job red on 2026-07-27: the 64KB zone-less case took 7.57s against a 3.0s
+    /// budget it clears in about a second locally. A debug build on an iOS Simulator on a
+    /// shared macOS runner is roughly 7x slower than this machine, and noisy neighbours can
+    /// make it worse.
+    ///
+    /// Scaling rather than skipping, because the guard still works scaled. What it is for is
+    /// catching a return to O(n^2), which is orders of magnitude: the quadratic version of
+    /// the 200KB case measured 10.6s locally, so ~74s on a runner this slow — nowhere near
+    /// a 5x budget. What it deliberately no longer claims to catch on CI is a 20% drift.
+    private static let budgetScale: TimeInterval =
+        ProcessInfo.processInfo.environment["CI"] != nil ? 5.0 : 1.0
+
+    private func assertUnder(_ label: String, _ text: String, budget rawBudget: TimeInterval) {
+        let budget = rawBudget * Self.budgetScale
         // One untimed pass, to match the Kotlin harness and to keep first-call
         // regex compilation out of the measurement.
         _ = TimeConverter.splice(input: text, targets: Self.targets, now: Self.now,
@@ -60,7 +74,8 @@ final class PerformanceTests: XCTestCase {
         XCTAssertLessThan(
             elapsed, budget,
             "\(label) took \(String(format: "%.2f", elapsed))s, over the \(budget)s budget. "
-                + "This budget is roughly 25x the expected time, so this almost certainly means "
+                + "(scale \(Self.budgetScale)x). This budget is roughly 25x the expected time, "
+                + "so this almost certainly means "
                 + "the parser went quadratic again — look for a substring() or a regex run over "
                 + "the whole string inside the per-match loop in TimeParser.detect, or in "
                 + "stampRanges."
