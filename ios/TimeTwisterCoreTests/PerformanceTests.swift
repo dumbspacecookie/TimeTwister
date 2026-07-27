@@ -56,8 +56,22 @@ final class PerformanceTests: XCTestCase {
     /// catching a return to O(n^2), which is orders of magnitude: the quadratic version of
     /// the 200KB case measured 10.6s locally, so ~74s on a runner this slow — nowhere near
     /// a 5x budget. What it deliberately no longer claims to catch on CI is a 20% drift.
-    private static let budgetScale: TimeInterval =
-        ProcessInfo.processInfo.environment["CI"] != nil ? 5.0 : 1.0
+    ///
+    /// Keyed on the *simulator*, not on a `CI` environment variable. The first attempt used
+    /// `ProcessInfo.environment["CI"]` and was completely inert: xcodebuild runs the test
+    /// bundle inside the simulator, and the runner's environment does not cross that
+    /// boundary, so the scale stayed 1.0 and the log dutifully printed `(scale 1.0x)` next
+    /// to the failure. A compile-time check needs no plumbing and cannot be lost in transit.
+    ///
+    /// This also targets the condition more honestly than "am I on CI" did: what is slow is
+    /// a debug build on a simulator, wherever it runs. A real device keeps the tight budget.
+    private static let budgetScale: TimeInterval = {
+        #if targetEnvironment(simulator)
+        return 5.0
+        #else
+        return 1.0
+        #endif
+    }()
 
     private func assertUnder(_ label: String, _ text: String, budget rawBudget: TimeInterval) {
         let budget = rawBudget * Self.budgetScale
