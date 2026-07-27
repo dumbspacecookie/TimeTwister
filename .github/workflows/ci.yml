@@ -2,7 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `dev` is the default branch and where the work lands; `main` is kept in the list
+    # only so this keeps working if the branch is ever renamed back.
+    #
+    # This said `[main]` alone until 2026-07-27, while the only branch carrying code was
+    # `dev` and `main` did not exist on the remote at all — so every job in this file had
+    # never once executed. `gh run list` returned an empty history. A workflow watching a
+    # branch that isn't there is indistinguishable from a green pipeline in the UI.
+    branches: [dev, main]
   pull_request:
   workflow_dispatch:
 
