@@ -17,8 +17,10 @@ against the same corpus, and the README no longer claims things that aren't
 true. What remains is listed below in the order it should be tackled, with the
 reason for that order.
 
-**Nothing here is distributed.** No release tag exists, `versionCode` is still 1,
-and the iOS pipeline has never gone green.
+**Nothing here is distributed.** No release tag exists and `versionCode` is still 1.
+The iOS pipeline *does* now go green, and CI produces an unsigned IPA
+(`timetwister-unsigned-ipa`) containing the app, the embedded core framework and both
+extensions — re-signable with Sideloadly on any OS. Nobody has installed it.
 
 ---
 
@@ -30,8 +32,8 @@ and the iOS pipeline has never gone green.
 | Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. **72 tests.** One known divergence left: `G109`, ICU folding U+212A KELVIN inside a case-insensitive ASCII class |
 | Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below). **28 unit tests as of 2026-07-26** — before that the module had no test source set and CI's test step was passing vacuously |
 | Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested. **71 tests** (composes the core in) |
-| iOS app | Core is verified; the app, keyboard and share extension still need a Mac |
-| CI | Android + desktop jobs sound. Swift core is covered twice as of 2026-07-26 — `xcodebuild` on macOS (always was) and a new fast `swift test` job for the SwiftPM path (**unverified: no remote, so it has never run**). iOS app build almost certainly never passed (no schemes were declared until recently, still unverified) |
+| iOS app | **The app, keyboard and share extension COMPILE** — verified by CI 2026-07-27, the first time they have ever been built anywhere but a local Xcode session. Core tests also pass on a real iOS simulator, not just corelibs. Still never *run*: no UI has been exercised on a device or simulator |
+| CI | **All four jobs green as of 2026-07-27** (run `30281316571`) — Android, desktop, Swift-core/SwiftPM, and iOS. This was the first CI run in the project's history: the workflow triggered on `push: [main]` while the only branch with code was `dev`, so nothing had ever executed and `gh run list` was empty. Both previously-unverified jobs (`swift-core`, iOS) now pass |
 
 Test loop — no Android SDK needed for either core:
 
@@ -102,6 +104,14 @@ Three defects surfaced on the way and are worth remembering:
 - **`NSTimeZone.default` is ignored by swift-corelibs.** The Kotlin suite's trick
   of pinning the process default looks like it works off a Mac and does not.
   `detect`/`splice`/`maybeSplice` now take an optional `defaultZone`.
+- **A member named `zone` in an `XCTestCase` subclass does not compile under Xcode.**
+  `XCTestCase` inherits `NSObject`, whose legacy `-zone` selector it collides with:
+  *"getter for 'zone' ... conflicts with method 'zone()' from superclass 'NSObject'"*.
+  A hard error on macOS and **completely invisible to `swift test` on Windows**, which
+  has no Objective-C runtime — so both cores read green for days while the iOS test
+  target could not build at all. Found by the first CI run, 2026-07-27. The general
+  lesson is the limit of the Windows workflow: `swift test` verifies the logic, not the
+  Objective-C interop.
 - **`TimeZone.abbreviation(for:)` is backed by CLDR data corelibs doesn't carry**,
   so 13 rows rendered "3pm CEST" on a phone and "3pm UTC+2" on CI. Both cores now
   carry their own standard/daylight pairs for the five DST-observing zones they
@@ -450,7 +460,17 @@ The corpus row was right and the roadmap item was wrong. See §5.
 ### D4. Signing material
 Android keystore; six Apple secrets. Needed before anything reaches a person.
 
-### D5. A Mac session
+### D5. A Mac session — **narrowed 2026-07-27**
+
+CI now builds every iOS target and produces an unsigned, structurally complete IPA
+(app + `TimeTwisterCore.framework` + both `.appex` bundles), so a Mac is **no longer
+needed to build or to get this onto your own iPhone** — Sideloadly with a free Apple
+ID re-signs it from Windows, good for 7 days per signing. A Mac remains required only
+for TestFlight/App Store distribution and for exercising the keyboard UI in Xcode.
+
+The original text follows.
+
+
 The only way to prove iOS CI works, and now the *only* thing standing between the
 Swift core and a shippable iOS build — the logic itself is verified. Gates every
 remaining iOS item.
