@@ -29,9 +29,10 @@ extensions — re-signable with Sideloadly on any OS. Nobody has installed it.
 | | State |
 |---|---|
 | Shared Kotlin core | 276-row graded corpus, blocking gate 100%, overall 99.35% (five deliberate `known_gap` rows); 9 invariants over 500 seeded cases each; perf guarded. **63 tests** |
-| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. **72 tests.** One known divergence left: `G109`, ICU folding U+212A KELVIN inside a case-insensitive ASCII class |
+| Shared Swift core | Same corpus, same gate, same red-team suite, **all 9 invariants** on the same seeded inputs, perf guarded. Builds and tests without a Mac. **83 tests** (incl. `UserPreferences`, untested until 2026-07-27). One known divergence left: `G109`, ICU folding U+212A KELVIN inside a case-insensitive ASCII class |
 | Android app | Builds, installs, runs on a real AVD. Most UX paths hand-verified (below). **28 unit tests as of 2026-07-26** — before that the module had no test source set and CI's test step was passing vacuously |
 | Desktop tray | Builds, tests, `jpackage` app-image runs without a system JVM. Swing/tray wiring untested. **71 tests** (composes the core in) |
+| iOS prefs | `UserPreferences` covered as of 2026-07-27 — persistence via the `init(defaults:)` seam, and defaults now **capped identically to Kotlin**. Until then Android capped the default zone list and iOS did not, so the same untouched state rendered a 4-zone stamp on Android and a 5-zone one on iOS |
 | iOS app | **The app, keyboard and share extension COMPILE** — verified by CI 2026-07-27, the first time they have ever been built anywhere but a local Xcode session. Core tests also pass on a real iOS simulator, not just corelibs. Still never *run*: no UI has been exercised on a device or simulator |
 | CI | **All four jobs green as of 2026-07-27** (run `30281316571`) — Android, desktop, Swift-core/SwiftPM, and iOS. This was the first CI run in the project's history: the workflow triggered on `push: [main]` while the only branch with code was `dev`, so nothing had ever executed and `gh run list` was empty. Both previously-unverified jobs (`swift-core`, iOS) now pass |
 
