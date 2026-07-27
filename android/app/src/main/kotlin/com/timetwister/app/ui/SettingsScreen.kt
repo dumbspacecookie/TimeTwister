@@ -133,6 +133,26 @@ fun SettingsScreen() {
         }
     }
 
+    // The picker is a full screen rather than a dialog, so it replaces this one instead of
+    // floating over it. That is not cosmetic: as a dialog it had its own window, which never
+    // received IME insets, so in landscape the keyboard covered the result list and Cancel
+    // with no way to reach either. See ZonePickerScreen's header.
+    //
+    // Returning early rather than wrapping the rest in an else-branch keeps the diff honest
+    // and the state above this line survives, because it is declared before the return.
+    if (pickerOpen) {
+        ZonePickerScreen(
+            onDismiss = { pickerOpen = false },
+            onPick = { z ->
+                // addTargetZone dedupes inside the DataStore transaction, so no pre-check
+                // against a possibly-superseded snapshot of `zones`.
+                scope.launch { prefs.addTargetZone(z) }
+                pickerOpen = false
+            },
+        )
+        return
+    }
+
     Scaffold(
         topBar = { CenterAlignedTopAppBar(title = { Text(stringResource(R.string.app_name)) }) },
     ) { pad ->
@@ -237,19 +257,6 @@ fun SettingsScreen() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-    }
-
-    if (pickerOpen) {
-        TimeZonePickerDialog(
-            onDismiss = { pickerOpen = false },
-            onPick = { z ->
-                // No pre-check against `zones` any more: addTargetZone dedupes inside the
-                // DataStore transaction, which is also correct when this lambda is holding
-                // a list from a composition that has already been superseded.
-                scope.launch { prefs.addTargetZone(z) }
-                pickerOpen = false
-            },
-        )
     }
 
     if (suggestionsOpen) {

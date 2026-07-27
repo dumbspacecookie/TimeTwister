@@ -145,11 +145,15 @@ is left.
       absolute budgets ~25× the measured time. `MAX_INPUT_CHARS` moved into
       `TimeParser` and is now applied by the iOS extension, the desktop tray and
       Android; the keyboard clamps its context window to 512 characters.
-- [ ] **Autumn fall-back is unhandled on both cores.** An ambiguous wall clock
-      (1:30am ET on 2026-11-01 happens twice) silently resolves to the earlier
-      instant, with no marker and no refusal. `isUnrepresentable` structurally
-      cannot fire — an ambiguous time round-trips perfectly. Needs an owner
-      decision (D6).
+- [x] ~~**Autumn fall-back is unhandled on both cores.**~~ **Closed as decided, not
+      as fixed (D6, 2026-07-25).** An ambiguous wall clock (1:30am ET on 2026-11-01
+      happens twice) resolves to the *earlier* instant — which is what
+      `ZonedDateTime.of` and every calendar app do — and that choice is now pinned by
+      a test in both red-team suites rather than left to chance.
+      `isUnrepresentable` structurally cannot fire here: an ambiguous time round-trips
+      perfectly, unlike a spring-forward gap. Refusing would decline an
+      ordinary-looking input with an explanation nobody wants. Exposure is one hour,
+      once a year, per zone, at 1-2am. Listed under "Accepted, not scheduled".
 - [x] ~~**ICU `\b` ≠ Java `\b`.**~~ **Fixed 2026-07-26**, along with three other
       regex-dialect divergences a re-measured differential (24,210 inputs) turned
       up. The root cause in every case was the same: `\d`, `\b`, `$` and `(?i)` do
@@ -264,22 +268,28 @@ both directions (see the landscape entry).
       the "All" header printed even with nothing beneath it, and "no matches" was
       keyed off the All list alone so it could claim nothing matched while matching
       rows sat directly above. Verified: `york` → exactly one New York row.
-- [ ] 🔴 **Zone picker unusable in landscape with the keyboard up.** **Attempted
-      twice, both attempts made it worse, both reverted.** Recording the findings
-      because they are most of the work:
-      - `imePadding()` is silently a **no-op inside a Compose `Dialog`** here.
-        `WindowInsets.ime` stays zero, and neither `decorFitsSystemWindows = false`
-        nor `SOFT_INPUT_ADJUST_RESIZE` on the dialog's own window changed that.
-      - Attempt 2 shrank the dialog instead. There is ~270px above a landscape
-        keyboard; title (74) + field (125) fills it, so the list got **zero** height
-        and the footer Cancel was clipped off entirely — trading "Cancel is behind
-        the keyboard" for "there is no list and no Cancel at all".
-      - Measured with rows laid out at **y=380..851 against a keyboard top of ~390**:
-        present in the accessibility tree, and **inert when tapped**. The a11y tree
-        lists occluded nodes, so "the row is there" was a false positive; the tap
-        test is what caught it.
-      - **The fix is to stop being a `Dialog`** — a full screen/route owns its
-        insets. That is a structural change, not a polish item.
+- [x] ~~🔴 **Zone picker unusable in landscape with the keyboard up.**~~ **Fixed
+      2026-07-27, on the third attempt, by stopping being a `Dialog`.** The first two
+      attempts are kept in the git history because the reason they failed *was* the
+      diagnosis: a dialog owns its own window, that window never receives IME insets
+      here, so `imePadding()` inside it was a silent no-op — and neither
+      `decorFitsSystemWindows = false` nor `SOFT_INPUT_ADJUST_RESIZE` on the dialog's
+      window changed it.
+      `ZonePickerScreen` is now a full screen in the activity's own window, so it
+      inherits the activity's insets and one `imePadding()` on the `Scaffold` does the
+      job. `MainActivity` is pinned to `android:windowSoftInputMode="adjustResize"`,
+      which is the documented other half of that contract, and a `BackHandler` restores
+      the dismissal that came free with a dialog.
+      - **A screen alone was not enough.** A landscape phone leaves ~390px above the
+        keyboard and a top bar plus a search field is all of it, so the list still
+        measured zero height. In a short viewport (`screenHeightDp < 480`) the top bar
+        is dropped, Close moves inline with the field, and section headers are
+        suppressed — a 45px header was a third of the only row available.
+      - **Verified by tapping, not by looking.** With the keyboard up in landscape the
+        first row now spans y=252..394 against a keyboard top of ~396, and typing
+        `tokyo` then tapping the result **persisted it to disk** — the check the
+        previous attempts failed. Portrait is unchanged (title, both section headers,
+        10 rows, picking works), and the stale-settings race still measures 0/6.
 - [x] ~~The false-positive decline reuses the no-detection string.~~ **Partly fixed,
       and the item was aimed at the wrong input** (the same way `half past 5` was).
       `use 12 pt font` contains no time, so "No time found" was *correct* there. The

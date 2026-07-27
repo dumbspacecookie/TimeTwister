@@ -1,36 +1,42 @@
 package com.timetwister.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.timetwister.app.R
 import com.timetwister.core.TimeZoneAlias
 import java.time.ZoneId
@@ -179,9 +185,25 @@ private fun List<ZoneEntry>.search(query: String): List<ZoneEntry> {
     return filter { entry -> tokens.all { entry.haystack.contains(it) } }
 }
 
+/**
+ * Full-screen zone picker.
+ *
+ * It was a `Dialog` until 2026-07-27, and that was the bug. A dialog gets its own window,
+ * which never receives IME insets here — so `imePadding()` inside it was silently a no-op,
+ * `WindowInsets.ime` stayed zero, and neither `decorFitsSystemWindows = false` nor
+ * `SOFT_INPUT_ADJUST_RESIZE` on the dialog's window changed that. In landscape the dialog
+ * therefore extended under the keyboard: rows were laid out at y=380..851 against a keyboard
+ * top of ~390, present in the accessibility tree and completely inert when tapped, with
+ * Cancel off the bottom. Shrinking the dialog instead only moved the damage around (list at
+ * zero height, Cancel clipped off the edge).
+ *
+ * A screen in the activity's own window gets the insets the activity gets, so one
+ * `imePadding()` on the Scaffold is all this needs — plus `adjustResize` in the manifest,
+ * which is the documented other half of that contract.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TimeZonePickerDialog(
+fun ZonePickerScreen(
     onDismiss: () -> Unit,
     onPick: (ZoneId) -> Unit,
 ) {
@@ -205,32 +227,70 @@ fun TimeZonePickerDialog(
     }
     val nothingMatched = filteredCommon.isEmpty() && filteredAll.isEmpty()
 
-    // NOT fixed here: with the keyboard up in landscape this dialog still extends under the
-    // IME, so the result list and Cancel can be unreachable. Two attempts are recorded in
-    // PLAN.md because both made it worse and were reverted -- imePadding() is silently a
-    // no-op inside a Compose Dialog here (WindowInsets.ime stays zero; neither
-    // decorFitsSystemWindows = false nor SOFT_INPUT_ADJUST_RESIZE on the dialog's own window
-    // changed that), and shrinking the dialog instead left the list at zero height and
-    // clipped Cancel off the edge entirely. Measured: rows laid out at y=380..851 against a
-    // keyboard starting at ~390, present in the accessibility tree and inert when tapped.
-    // The real fix is to stop being a Dialog -- a full screen/route owns its insets.
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
+    // Back must leave the picker, not the app. As a Dialog this came free; a screen has to
+    // say so. Note the keyboard eats the first back press itself, which is what makes the
+    // short-viewport flow below work: back dismisses the IME, the results appear, back again
+    // leaves the picker.
+    BackHandler(onBack = onDismiss)
+
+    // A landscape phone leaves ~390px above the keyboard, and a top bar plus a search field
+    // is all of it -- measured, with the result list at literally zero height. So in a short
+    // viewport the top bar goes and Close moves inline with the field, which costs nothing
+    // vertically and buys the list a row it can actually show while you type.
+    val isShort = LocalConfiguration.current.screenHeightDp < 480
+
+    Scaffold(
+        topBar = {
+            if (isShort) return@Scaffold
+            TopAppBar(
+                title = {
+                    Text(
+                        text = stringResource(R.string.picker_title),
+                        modifier = Modifier.semantics { heading() },
+                    )
+                },
+                navigationIcon = {
+                    // The only way out now that there is no scrim to tap. Reachable with a
+                    // switch or a screen reader, and it cannot be covered by the keyboard
+                    // because the top bar is above it by construction -- which is exactly
+                    // what the old footer Cancel could not promise.
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.action_cancel),
+                        )
+                    }
+                },
+            )
+        },
+        // The whole fix, in one modifier that now actually applies: the scaffold ends where
+        // the keyboard begins, so the list below gets real height instead of being drawn
+        // underneath it.
+        modifier = Modifier.imePadding(),
+    ) { pad ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .fillMaxHeight(0.85f),
+                .padding(pad)
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
         ) {
-            Column(Modifier.padding(16.dp)) {
-                Text(
-                    text = stringResource(R.string.picker_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.semantics { heading() },
-                )
-                Spacer(Modifier.height(12.dp))
+            if (isShort) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.action_cancel),
+                        )
+                    }
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text(stringResource(R.string.picker_search_label)) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            } else {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -238,50 +298,42 @@ fun TimeZonePickerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(12.dp))
+            }
+            Spacer(Modifier.height(8.dp))
 
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                ) {
-                    if (filteredCommon.isNotEmpty()) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                // Section headers are suppressed in a short viewport. With ~150px of list
+                // above a landscape keyboard, a 45px header is a third of the only row you
+                // get -- it was reducing the first result to a sliver.
+                if (filteredCommon.isNotEmpty()) {
+                    if (!isShort) {
                         item { SectionHeader(stringResource(R.string.picker_section_common)) }
-                        items(filteredCommon, key = { "common:${it.id}" }) { ZoneRow(it, onPick) }
                     }
-                    // Header only when there is something under it. It used to print
-                    // unconditionally alongside Common, so a search matching only a common
-                    // zone showed an "All" heading with nothing beneath it.
-                    if (filteredAll.isNotEmpty()) {
-                        if (filteredCommon.isNotEmpty()) {
-                            item { SectionHeader(stringResource(R.string.picker_section_all)) }
-                        }
-                        items(filteredAll, key = { "all:${it.id}" }) { ZoneRow(it, onPick) }
-                    }
-                    // Keyed off BOTH lists: this was `filteredAll.isEmpty()`, which claimed
-                    // "no matches" while matching common rows sat directly above it.
-                    if (nothingMatched) {
-                        item {
-                            Text(
-                                text = stringResource(R.string.picker_no_matches, query),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 16.dp),
-                            )
-                        }
-                    }
+                    items(filteredCommon, key = { "common:${it.id}" }) { ZoneRow(it, onPick) }
                 }
-
-                // Scrim-tap was previously the only way out, which is undiscoverable and
-                // impossible to reach with a switch/keyboard. Only in the tall layout — the
-                // short one has already put Cancel next to the search field, and a footer
-                // here is exactly what the keyboard was covering.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.action_cancel))
+                // Header only when there is something under it. It used to print
+                // unconditionally alongside Common, so a search matching only a common
+                // zone showed an "All" heading with nothing beneath it.
+                if (filteredAll.isNotEmpty()) {
+                    if (filteredCommon.isNotEmpty() && !isShort) {
+                        item { SectionHeader(stringResource(R.string.picker_section_all)) }
+                    }
+                    items(filteredAll, key = { "all:${it.id}" }) { ZoneRow(it, onPick) }
+                }
+                // Keyed off BOTH lists: this was `filteredAll.isEmpty()`, which claimed
+                // "no matches" while matching common rows sat directly above it.
+                if (nothingMatched) {
+                    item {
+                        Text(
+                            text = stringResource(R.string.picker_no_matches, query),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
                     }
                 }
             }
