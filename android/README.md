@@ -4,7 +4,9 @@ Android build of TimeTwister. Uses `ACTION_PROCESS_TEXT` as the primary entry po
 
 No keyboard switching, no accessibility service, no Internet permission.
 
-One permission *is* declared: `READ_CONTACTS`. It's used only by the optional "Suggest from contacts" button in Settings, which reads phone-number country codes to propose target zones. It's a runtime permission — nothing is read unless you tap that button and grant it, and the conversion flow works fine if you never do.
+One permission *is* declared: `READ_CONTACTS`. It's used only by the optional "Suggest from contacts" button in Settings, which reads phone-number country codes to propose target zones. It's a runtime permission — nothing is read unless you tap that button and grant it, a disclosure of what's read is shown *before* the system dialog, and the conversion flow works fine if you never do.
+
+One thing does leave the device, and it isn't this app: Android Auto Backup copies your saved zone list to your Google account by default. It's scoped to an explicit allowlist rather than the whole data directory — see the Privacy section of the [root README](../README.md).
 
 ## Module layout
 
@@ -16,6 +18,7 @@ android/
 ├── core/                          # pure Kotlin/JVM — no Android deps
 │   └── src/main/kotlin/com/timetwister/core/
 │       ├── DetectedTime.kt
+│       ├── CountryZone.kt         # phone country code → plausible zone
 │       ├── TimeZoneAlias.kt       # "CT" / "pacific" / "EST" → IANA
 │       ├── TimeParser.kt          # regex-based detector
 │       └── TimeConverter.kt       # formatting + multi-TZ rendering
@@ -25,6 +28,7 @@ android/
         ├── kotlin/com/timetwister/app/
         │   ├── MainActivity.kt            # Compose settings host
         │   ├── ProcessTextActivity.kt     # the ACTION_PROCESS_TEXT handler
+        │   ├── ProcessTextDecision.kt     # the five outcomes — pure, unit-tested
         │   ├── UserPreferences.kt         # DataStore-backed prefs
         │   ├── ContactZoneInferencer.kt   # optional READ_CONTACTS → zone suggestions
         │   └── ui/                        # Compose UI
@@ -117,14 +121,16 @@ If none of those are set, `assembleRelease` still builds — just unsigned. Play
 
 ## Using it
 
-1. Open TimeTwister once. Pick the zones you want every stamp to include (defaults to your local zone + the four US zones).
+1. Open TimeTwister once. Pick the zones you want every stamp to include. The defaults are your own zone plus US Eastern, Central and Pacific — capped so a fresh install is never already over the readable-stamp limit.
 2. Go to any messaging app. Type a time like `5pm CT` (or `17:00 ET`, or `5:30pm pacific`).
 3. Long-press to select the phrase.
 4. Tap the overflow (⋮) in the selection toolbar. You'll see **TimeTwister**.
 5. Tap it. The selection is replaced with `5pm CT (6pm ET · 3pm PT)`.
 6. Send.
 
-If the host app is read-only (you're trying this on a received message), the selection toolbar still shows TimeTwister but tapping it is a no-op — we can't write back to text we don't own.
+If the host app is read-only — you're trying this on a message you received, which is the most intuitive thing to try first — the text can't be rewritten in place. So the converted selection goes to your clipboard and the stamp is shown to you, instead of the tap appearing to do nothing.
+
+If your text comes back unchanged, that is usually deliberate. The parser declines anything it isn't sure of rather than guessing: relative phrases (`half past 5pm`), zone abbreviations it doesn't support, a zone separated from the time by markup (`*5pm* CT`), and bare hours with no am/pm. It would rather miss a conversion than quietly send the wrong time.
 
 ## What's different from the iOS build
 
@@ -141,12 +147,20 @@ If the host app is read-only (you're trying this on a received message), the sel
 ## Tests
 
 ```bash
-./gradlew :core:test            # parser, alias table, stamp rendering — JVM, no emulator
-./gradlew :app:testDebugUnitTest
+./gradlew :core:test            # 63 tests — corpus, properties, red team, perf. JVM, no emulator
+./gradlew :app:testDebugUnitTest # 28 tests — the ACTION_PROCESS_TEXT decision + prefs codec
 ```
 
-Both run in CI on every push, alongside the desktop build.
+Both run in CI on every push, alongside the desktop build and the Swift core.
 
-The Kotlin suite is *meant* to mirror the iOS `TimeTwisterCoreTests` so divergence between platforms shows up fast, but it doesn't today — Kotlin has grown the larger suite and covers cases Swift doesn't. See the parity notes in the [root README](../README.md).
+`core` is graded against a **shared 276-row corpus** at `core/src/test/resources/eval/corpus.tsv`. The Swift core reads that same file rather than a copy, so a row cannot pass on Android and fail on iOS unnoticed. On top of it: 9 property invariants over 500 seeded cases each (the same seeded inputs on both cores), a red-team regression suite, and absolute performance budgets.
 
-`StampDemo` is `@Ignore`'d on purpose so it stays out of normal runs; `--tests "*StampDemo*"` therefore reports "1 skipped" and prints nothing. Drop the `@Ignore` to see its output.
+The corpus deliberately keeps a few `known_gap` rows, so the headline score is **not** 100% and the report's OPEN ITEMS section actually prints. A green eval that lists nothing missing is measuring its own corpus before it measures the parser.
+
+`:app` tests are framework-free by design: the logic worth testing was pulled into `ProcessTextDecision.kt` and `UserPreferences`' companion so plain JUnit reaches it. The Toast/clipboard/intent paths need Robolectric or instrumentation and are **not** covered. Neither number says anything about the UI — see [`PLAN.md`](../PLAN.md) for what is and isn't verified.
+
+`StampDemo` is gated on a property rather than `@Ignore`, and the build forwards it into the test JVM and turns on stdout:
+
+```bash
+./gradlew :core:test --tests "*StampDemo*" "-Dtimetwister.demo=1"
+```
